@@ -187,6 +187,7 @@ EXP_ST u64 total_crashes,             /* Total number of crashes          */
            last_path_time,            /* Time for most recent path (ms)   */
            last_crash_time,           /* Time for most recent crash (ms)  */
            last_hang_time,            /* Time for most recent hang (ms)   */
+           max_exec_time=0,           /* Maximum execution time           */
            last_crash_execs,          /* Exec counter at last crash       */
            queue_cycle,               /* Queue round counter              */
            cycles_wo_finds,           /* Cycles without any new paths     */
@@ -215,7 +216,8 @@ static s32 stage_cur_byte,            /* Byte offset of current stage op  */
 static u8  stage_val_type;            /* Value type (STAGE_VAL_*)         */
 
 static u64 stage_finds[32],           /* Patterns found per fuzz stage    */
-           stage_cycles[32];          /* Execs per fuzz stage             */
+           stage_cycles[32],          /* Execs per fuzz stage             */
+           last_exec_times[1000]={0}; /* Last 1000 execution times        */
 
 static u32 rand_cnt;                  /* Random number counter            */
 
@@ -2427,6 +2429,12 @@ static u8 run_target(char** argv, u32 timeout) {
   exec_ms = (u64) timeout - (it.it_value.tv_sec * 1000 +
                              it.it_value.tv_usec / 1000);
 
+  u64 exec_time = timeout *1000l*1000l - (it.it_value.tv_sec*1000l*1000l + it.it_value.tv_usec);
+  last_exec_times[total_execs%1000] = exec_time;
+  
+  if(max_exec_time<exec_time)
+    max_exec_time = exec_time;
+
   it.it_value.tv_sec = 0;
   it.it_value.tv_usec = 0;
 
@@ -3138,7 +3146,7 @@ static void write_crash_readme(void) {
    entry is saved, 0 otherwise. */
 
 static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
-
+// Interesting!
   u8  *fn = "";
   u8  hnb;
   s32 fd;
@@ -3917,7 +3925,7 @@ static void show_stats(void) {
   u32 t_bytes, t_bits;
 
   u32 banner_len, banner_pad;
-  u8  tmp[256];
+  u8  tmp[256], tmp2[256];
 
   cur_ms = get_cur_time();
 
@@ -4155,7 +4163,35 @@ static void show_stats(void) {
 
   SAYF(bSTOP " count coverage : " cRST "%-21s " bSTG bV "\n", tmp);
 
-  SAYF(bVR bH bSTOP cCYA " stage progress " bSTG bH20 bX bH bSTOP cCYA
+  SAYF(bVR bH bSTOP cCYA " My features " bSTG bH20 bH bH bH bHT bH 
+       bH10 bH5 bH bH bH bH bH20 bVL "\n");
+
+  max_exec_time = 0;
+  u64 last_times = 0;
+  if(total_execs < 1000) {
+    for(unsigned int i = 0; i<total_execs; i++) {
+      last_times += last_exec_times[i];
+      if(max_exec_time < last_exec_times[i])
+        max_exec_time = last_exec_times[i];
+    }
+  }
+  else {
+    for(uint16_t i = 0 ; i<1000; i++) {
+      last_times += last_exec_times[i];
+      if(max_exec_time < last_exec_times[i])
+        max_exec_time = last_exec_times[i];
+    }
+  }
+
+  unsigned int last_exec_counts = (1000 ? total_execs>=1000 : total_execs);
+
+  sprintf(tmp, "%0.05Lf us", ((long double)last_times)/1000);
+  sprintf(tmp2, "%lld us", max_exec_time);
+
+  SAYF(bV SP5 bSTOP "   avg time :  " cRST "%-18s " bSTG "   " bSTOP 
+       " max time :   " cRST "%-21s " bSTG bV "\n", tmp, tmp2);
+
+  SAYF(bVR bH bSTOP cCYA " stage progress " bSTG bH20 bHB bH bSTOP cCYA
        " findings in depth " bSTG bH20 bVL "\n");
 
   sprintf(tmp, "%s (%0.02f%%)", DI(queued_favored),
@@ -4976,7 +5012,7 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
    skipped or bailed out. */
-
+// 
 static u8 fuzz_one(char** argv) {
 
   s32 len, fd, temp_len, i, j;

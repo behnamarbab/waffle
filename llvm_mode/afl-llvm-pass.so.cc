@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <iterator>
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
@@ -111,6 +112,10 @@ bool AFLCoverage::runOnModule(Module &M) {
       M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
       0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
+  GlobalVariable *InstCntPtr = new GlobalVariable(
+      M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__ben_cnt_instructions",
+      0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
+
   /* Instrument all the things! */
 
   int inst_blocks = 0;
@@ -128,6 +133,12 @@ bool AFLCoverage::runOnModule(Module &M) {
       unsigned int cur_loc = AFL_R(MAP_SIZE);
 
       ConstantInt *CurLoc = ConstantInt::get(Int32Ty, cur_loc);
+
+      // OKF("    - loc: %u", (CurLoc->getSExtValue()));
+      // OKF("    Current loc: %u", cur_loc);
+
+      // wow | nosanitze is telling the instrumentation not to monitor a variable,
+      // wow | memory is not tracked for errors
 
       /* Load prev_loc */
 
@@ -156,12 +167,24 @@ bool AFLCoverage::runOnModule(Module &M) {
           IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> 1), AFLPrevLoc);
       Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
+      int instructions_in_bb = std::distance(BB.begin(), BB.end());
+
+      LoadInst *InstCnt = IRB.CreateLoad(InstCntPtr);
+      InstCnt->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      // Value *InstCntCasted = IRB.CreateZExt(InstCnt, Int32Ty);
+
+      Value *IncrInstCnt = IRB.CreateAdd(InstCnt, 
+          ConstantInt::get(Int32Ty, instructions_in_bb));
+      IRB.CreateStore(IncrInstCnt, InstCntPtr)
+          ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
+      OKF("Count of instructions %u", instructions_in_bb);
+
       inst_blocks++;
 
     }
 
   /* Say something nice. */
-
   if (!be_quiet) {
 
     if (!inst_blocks) WARNF("No instrumentation targets found.");
@@ -169,7 +192,6 @@ bool AFLCoverage::runOnModule(Module &M) {
              inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
              ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
               "ASAN/MSAN" : "non-hardened"), inst_ratio);
-
   }
 
   return true;

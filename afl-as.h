@@ -709,6 +709,7 @@ static const u8* main_payload_64 =
   "  .lcomm   __afl_area_ptr, 8\n"
 #ifndef COVERAGE_ONLY
   "  .lcomm   __afl_prev_loc, 8\n"
+  "  .lcomm   __ben_cnt_instructions, 8\n"
 #endif /* !COVERAGE_ONLY */
   "  .lcomm   __afl_fork_pid, 4\n"
   "  .lcomm   __afl_temp, 4\n"
