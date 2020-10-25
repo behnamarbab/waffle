@@ -159,6 +159,9 @@ EXP_ST u32* perf_bits;                /* PERF - SHM with 2nd (perf) map   */
 EXP_ST u32 max_counts[PERF_SIZE];     /* PERF - keeps track of max value  */
 EXP_ST u32 staleness[PERF_SIZE];      /* PERF - the staleness max values */
 
+EXP_ST u32* icnt;                    /* ICNT - SHM with 3rd variable     */
+// EXP_ST u32 max_icnts;                 /* ICNT - keeps track of max value  */
+
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
            virgin_crash[MAP_SIZE];    /* Bits we haven't seen in crashes  */
@@ -1190,10 +1193,10 @@ static inline u8 has_new_max() {
   int ret = 0;
   for (int i = 0; i < PERF_SIZE; i++){
       if (unlikely(perf_bits[i])){
-        if (unlikely(perf_bits[i] > max_counts[i])) {
+        if (unlikely(perf_bits[i] + *icnt > max_counts[i])) {
            ret = 1;
            DEBUG("New max(0x%04x) = %u (earlier was: %u)\n ", i, perf_bits[i], max_counts[i]);
-	   max_counts[i] = perf_bits[i];
+	         max_counts[i] = perf_bits[i] + *icnt;
         }
       }
   }
@@ -1508,7 +1511,7 @@ static void update_bitmap_score(struct queue_entry* q) {
       if (perf_bits[i]) {
          
          if (top_rated[i]) {
-           if (perf_bits[i] < max_counts[i]) continue;
+           if (perf_bits[i] + *icnt < max_counts[i]) continue;
          }
 
          /* Insert ourselves as the new winner. */
@@ -1674,7 +1677,8 @@ EXP_ST void setup_shm(void) {
     map right after the regular bitmap.  */
   /* always allocate so that programs instrumented with afl-clang-fast
      don't cause segfaults */
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + (PERF_SIZE * sizeof(u32)), IPC_CREAT | IPC_EXCL | 0600);
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + (PERF_SIZE+1) * sizeof(u32),
+   IPC_CREAT | IPC_EXCL | 0600);
   shm_sys_data = shmget(IPC_PRIVATE, sizeof(struct sys_data), IPC_CREAT | IPC_EXCL | 0600); //(wcventure)
 
   if (shm_id < 0) PFATAL("shmget() failed");
@@ -1699,7 +1703,10 @@ EXP_ST void setup_shm(void) {
   mem_data = shmat(shm_sys_data, NULL, 0);
 
   // setup perf bits if needes
-  if (max_ct_fuzzing) perf_bits = (u32 *) (trace_bits + MAP_SIZE);
+  if (max_ct_fuzzing) {
+    perf_bits = (u32 *) (trace_bits + MAP_SIZE);
+    icnt = (u32 *) (trace_bits + MAP_SIZE + PERF_SIZE*sizeof(u32));
+  }
   
   if (!trace_bits) PFATAL("shmat() failed");
   if (!mem_data) PFATAL("shmat() failed");
@@ -2613,7 +2620,10 @@ static u8 run_target(char** argv, u32 timeout) {
      territory. */
 
   memset(trace_bits, 0, MAP_SIZE);
-  if (max_ct_fuzzing) memset(perf_bits, 0, PERF_SIZE * sizeof(u32));
+  if (max_ct_fuzzing) {
+    memset(perf_bits, 0, PERF_SIZE * sizeof(u32));
+    *icnt = 0;
+  }
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -2924,7 +2934,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
        we want to bail out quickly. */
     
     ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-    stackScore_cur = MaxCallNum;
+    stackScore_cur = MaxCallNum + *icnt;
     if (stackScore_cur > stackScore_max)
       stackScore_max = stackScore_cur;
 
@@ -2965,7 +2975,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
         /* setup the perf cksum here. Assume it is not variable, or that 
           variability will be detected in the regular checking */ 
         if (max_ct_fuzzing) 
-          q->perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST); 
+          q->perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32)+sizeof(u32), HASH_CONST); 
         memcpy(first_trace, trace_bits, MAP_SIZE);
 
       }
@@ -2988,7 +2998,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->cal_failed  = 0;
 
   /* start: CountScore (wcventure) */
-  q -> stackScore = stackScore_cur;
+  q -> stackScore = stackScore_cur + *icnt;
   /* end: CountScore */
 
   total_bitmap_size += q->bitmap_size;
@@ -3551,7 +3561,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
     queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
     if (max_ct_fuzzing) 
-      queue_top->perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST); 
+      queue_top->perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32) + sizeof(32), HASH_CONST); 
 
     /* Try to calibrate inline; this also calls update_bitmap_score() when
        successful. */
@@ -3617,7 +3627,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         new_fault = run_target(argv, hang_tmout);
 
         ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-        stackScore_cur = MaxCallNum;
+        stackScore_cur = MaxCallNum + *icnt;
         if (stackScore_cur > stackScore_max)
           stackScore_max = stackScore_cur;
 
@@ -4904,7 +4914,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
   static u8 tmp[64];
   static u8 clean_trace[MAP_SIZE];
-  static u32 clean_perf[PERF_SIZE];
+  static u32 clean_perf[PERF_SIZE+1];
 
   u8  needs_write = 0, fault = 0;
   u32 trim_exec = 0;
@@ -4950,15 +4960,16 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       trim_execs++;
 
       ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-      stackScore_cur = MaxCallNum;
-      if (stackScore_cur > stackScore_max)
+      stackScore_cur = MaxCallNum + *icnt ;
+      // stackScore_cur = *icnt ;
+      if (stackScore_cur  > stackScore_max)
         stackScore_max = stackScore_cur;
 
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
 
       /* Note that we don't keep track of crashes or hangs here; maybe TODO? */
       if (max_ct_fuzzing)
-        perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST);
+        perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32) + sizeof(u32), HASH_CONST);
       exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
         
@@ -4988,7 +4999,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
           needs_write = 1;
           memcpy(clean_trace, trace_bits, MAP_SIZE);
-          if (max_ct_fuzzing) memcpy(clean_perf, perf_bits, PERF_SIZE*sizeof(u32)); 
+          if (max_ct_fuzzing) memcpy(clean_perf, perf_bits, (PERF_SIZE+1)*sizeof(u32)); 
 
         }
 
@@ -5022,7 +5033,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
     close(fd);
 
     memcpy(trace_bits, clean_trace, MAP_SIZE);
-    if (max_ct_fuzzing) memcpy(perf_bits, clean_perf, PERF_SIZE*sizeof(u32));
+    if (max_ct_fuzzing) memcpy(perf_bits, clean_perf, (PERF_SIZE+1)*sizeof(u32));
     update_bitmap_score(q);
 
   }
@@ -5055,7 +5066,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   fault = run_target(argv, exec_tmout);
 
   ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-  stackScore_cur = MaxCallNum;
+  stackScore_cur = MaxCallNum + *icnt;
   if (stackScore_cur > stackScore_max)
     stackScore_max = stackScore_cur;
 
@@ -5424,11 +5435,11 @@ static u8 too_stale(){
         // log the top rated for this one and the staleness
         if (top_rated[k])
           DEBUG("There is a top rated at key %d, val is %d, staleness is %d %s\n", k, max_counts[k], staleness[k],
-           (perf_bits[k] == max_counts[k]) ? "(maxed by me)" : "");
+           (perf_bits[k] + *icnt == max_counts[k]) ? "(maxed by me)" : "");
 
         /* increment staleness for any score that this input hits the max of.
            If score is increased while fuzzing input, staleness will be set to 0  */
-        if (perf_bits[k] == max_counts[k]){
+        if (perf_bits[k] + *icnt == max_counts[k]){
 
           my_min_staleness = (staleness[k] < my_min_staleness) ? staleness[k] : my_min_staleness;
           staleness[k]++;
@@ -5868,7 +5879,7 @@ static u8 fuzz_one(char** argv) {
       if (!dumb_mode && len >= EFF_MIN_LEN){
         exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
         if (max_ct_fuzzing) 
-          perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST);
+          perf_cksum = hash32(perf_bits, (PERF_SIZE+1)*sizeof(u32), HASH_CONST);
       } else {
         exec_cksum = ~queue_cur->exec_cksum;
         if (max_ct_fuzzing) 
@@ -7305,7 +7316,7 @@ static void sync_fuzzers(char** argv) {
         fault = run_target(argv, exec_tmout);
 
         ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-        stackScore_cur = MaxCallNum;
+        stackScore_cur = MaxCallNum + *icnt;
         if (stackScore_cur > stackScore_max)
           stackScore_max = stackScore_cur;
 

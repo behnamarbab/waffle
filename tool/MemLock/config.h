@@ -52,7 +52,7 @@
 #ifndef __x86_64__ 
 #  define MEM_LIMIT         25
 #else
-#  define MEM_LIMIT         50
+#  define MEM_LIMIT         500
 #endif /* ^!__x86_64__ */
 
 /* Default memory limit when running in QEMU mode (MB): */
@@ -323,6 +323,11 @@
  */
 #define PERF_SIZE_POW2      14
 #define PERF_SIZE           (1 << PERF_SIZE_POW2)
+
+// Size of the array of counters for each type of instruction
+
+#define ICNT_SIZE_POW2      8
+#define ICNT_SIZE           (1 << ICNT_SIZE_POW2)
 
 /* Maximum allocator request size (keep well under INT_MAX): */
 

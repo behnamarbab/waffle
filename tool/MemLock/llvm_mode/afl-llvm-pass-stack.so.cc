@@ -43,6 +43,8 @@
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/IR/InstVisitor.h"
+#include "llvm/IR/InstrTypes.h"
 
 using namespace llvm;
 
@@ -76,6 +78,91 @@ static inline std::string bb_description(const BasicBlock& bb) {
 
 }
 
+struct CountAllVisitor : public InstVisitor<CountAllVisitor> {
+  unsigned Count;
+  CountAllVisitor() : Count(0) {}
+
+  // void visitICmpInst(ICmpInst &I) { ++Count; }
+  // void visitFCmpInst(FCmpInst &I)                { ++Count;}
+  // void visitAllocaInst(AllocaInst &I)            { ++Count;}
+  // void visitLoadInst(LoadInst     &I)            { ++Count;}
+  void visitStoreInst(StoreInst   &I)            { 
+    ++Count;
+    // OKF("Storing %u", Count);
+  }
+  // void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) { ++Count;}
+  // void visitAtomicRMWInst(AtomicRMWInst &I)      { ++Count;}
+  // void visitFenceInst(FenceInst   &I)            { ++Count;}
+  // void visitGetElementPtrInst(GetElementPtrInst &I){ ++Count;}
+  // void visitPHINode(PHINode       &I)            { ++Count;}
+  // void visitTruncInst(TruncInst &I)              { ++Count;}
+  // void visitZExtInst(ZExtInst &I)                { ++Count;}
+  // void visitSExtInst(SExtInst &I)                { ++Count;}
+  // void visitFPTruncInst(FPTruncInst &I)          { ++Count;}
+  // void visitFPExtInst(FPExtInst &I)              { ++Count;}
+  // void visitFPToUIInst(FPToUIInst &I)            { ++Count;}
+  // void visitFPToSIInst(FPToSIInst &I)            { ++Count;}
+  // void visitUIToFPInst(UIToFPInst &I)            { ++Count;}
+  // void visitSIToFPInst(SIToFPInst &I)            { ++Count;}
+  // void visitPtrToIntInst(PtrToIntInst &I)        { ++Count;}
+  // void visitIntToPtrInst(IntToPtrInst &I)        { ++Count;}
+  // void visitBitCastInst(BitCastInst &I)          { ++Count;}
+  // void visitAddrSpaceCastInst(AddrSpaceCastInst &I) { ++Count;}
+  // void visitSelectInst(SelectInst &I)            { ++Count;}
+  // void visitVAArgInst(VAArgInst   &I)            { ++Count;}
+  // void visitExtractElementInst(ExtractElementInst &I) { ++Count;}
+  // void visitInsertElementInst(InsertElementInst &I) { ++Count;}
+  // void visitShuffleVectorInst(ShuffleVectorInst &I) { ++Count;}
+  // void visitExtractValueInst(ExtractValueInst &I){ ++Count;}
+  // void visitInsertValueInst(InsertValueInst &I)  { ++Count;}
+  // void visitLandingPadInst(LandingPadInst &I)    { ++Count;}
+  // void visitFuncletPadInst(FuncletPadInst &I) { ++Count;}
+  // void visitCleanupPadInst(CleanupPadInst &I) { ++Count;}
+  // void visitCatchPadInst(CatchPadInst &I)     { ++Count;}
+  // // void visitFreezeInst(FreezeInst &I)         { ++Count;}
+  void visitInstruction(Instruction &I) {
+    ++Count;
+    // OKF("Visiting %u", Count);
+  }
+
+  // void visitDbgDeclareInst(DbgDeclareInst &I)    { ++Count;}
+  // void visitDbgValueInst(DbgValueInst &I)        { ++Count;}
+  // // void visitDbgVariableIntrinsic(DbgVariableIntrinsic &I)  { ++Count;}
+  // // void visitDbgLabelInst(DbgLabelInst &I)        { ++Count;}
+  // void visitDbgInfoIntrinsic(DbgInfoIntrinsic &I){ ++Count;}
+  // void visitMemSetInst(MemSetInst &I)            { ++Count;}
+  // void visitMemCpyInst(MemCpyInst &I)            { ++Count;}
+  // void visitMemMoveInst(MemMoveInst &I)          { ++Count;}
+  // void visitMemTransferInst(MemTransferInst &I)  { ++Count;}
+  // void visitMemIntrinsic(MemIntrinsic &I)        { ++Count;}
+  // void visitVAStartInst(VAStartInst &I)          { ++Count;}
+  // void visitVAEndInst(VAEndInst &I)              { ++Count;}
+  // void visitVACopyInst(VACopyInst &I)            { ++Count;}
+  // void visitIntrinsicInst(IntrinsicInst &I)      { ++Count;}
+  // void visitCallInst(CallInst &I)                { ++Count;}
+  // void visitInvokeInst(InvokeInst &I)            { ++Count;}
+  // void visitCallBrInst(CallBrInst &I)            { ++Count;}
+  // void visitTerminator(Instruction &I) {Count++;}
+
+  // void visitReturnInst(ReturnInst &I) { Count++; }
+  // void visitBranchInst(BranchInst &I) { Count++; }
+  // void visitSwitchInst(SwitchInst &I) { Count++; }
+  // void visitIndirectBrInst(IndirectBrInst &I) { Count++; }
+  // void visitResumeInst(ResumeInst &I) { Count++; }
+  // void visitUnreachableInst(UnreachableInst &I) { Count++; }
+  // void visitCleanupReturnInst(CleanupReturnInst &I) { Count++; }
+  // void visitCatchReturnInst(CatchReturnInst &I) { Count++; }
+  // void visitCatchSwitchInst(CatchSwitchInst &I) { Count++; }
+
+  // void visitCastInst(CastInst &I)                { Count++;}
+  // // void visitUnaryOperator(UnaryOperator &I)      { Count++;}
+  // void visitBinaryOperator(BinaryOperator &I)    { Count++;}
+  // void visitCmpInst(CmpInst &I)                  { Count++;}
+  // void visitUnaryInstruction(UnaryInstruction &I){ Count++;}
+
+
+};
+
 
 char AFLCoverage::ID = 0;
 
@@ -86,6 +173,7 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
   IntegerType *Int32Ty = IntegerType::getInt32Ty(C);
+  // IntegerType *Int64Ty = IntegerType::getInt64Ty(C);
   PointerType *CharPtrTy = PointerType::getUnqual(Int8Ty);
   Type *VoidTy = Type::getVoidTy(C);
 
@@ -138,6 +226,10 @@ bool AFLCoverage::runOnModule(Module &M) {
   GlobalVariable *AFLPerfPtr =
       new GlobalVariable(M, PointerType::get(Int32Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_perf_ptr");
+  
+  GlobalVariable *AFLIcntPtr =
+      new GlobalVariable(M, PointerType::get(Int32Ty, 0), false,
+                         GlobalValue::ExternalLinkage, 0, "__afl_icnt_ptr");
 
   GlobalVariable *AFLPrevLoc = new GlobalVariable(
       M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
@@ -191,7 +283,6 @@ bool AFLCoverage::runOnModule(Module &M) {
         Value* EdgeId = IRB.CreateXor(PrevLocCasted, CurLoc);
 
         /* Load SHM pointer */
-
         LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
         MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
         Value *MapPtrIdx =
@@ -374,6 +465,28 @@ bool AFLCoverage::runOnModule(Module &M) {
 
       }
 
+      LoadInst *IcntPtr = IRB.CreateLoad(AFLIcntPtr);
+        IcntPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+        
+        
+        // Value *IcntMaskCasted = IRB.CreateZExt(IcntMask, IRB.getInt32Ty());
+        // Value *IcntEPtr =
+        //     IRB.CreateGEP(IcntPtr, ConstantInt::get(Int32Ty, 1));
+      /* Increment instruction counters  */
+        CountAllVisitor CAV;
+        CAV.visit(BB);
+        LoadInst *IcntTotalCounter = IRB.CreateLoad(IcntPtr); // Index 1 of the Icnt map
+        IcntTotalCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+        // ConstantInt *CNT = ConstantInt::get(Int32Ty, 14);
+        Value *CNT = IRB.getInt32(CAV.Count);
+        // Value *CNT = IRB.getInt32(17);
+        
+        // IRB.CreateCall(funcInstAdd, CNT);
+        Value *IcntTotalIncr = IRB.CreateAdd(IcntTotalCounter, CNT);
+
+        IRB.CreateStore(IcntTotalIncr, IcntPtr)
+            ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
       inst_blocks++;
 
     }
@@ -385,7 +498,7 @@ bool AFLCoverage::runOnModule(Module &M) {
   if (!be_quiet) {
 
     if (!inst_blocks) WARNF("No instrumentation targets found.");
-    else OKF("Instrumented %u locations (%s mode, ratio %u%%).",
+    else OKF("x      Instrumented %u locations (%s mode, ratio %u%%).",
              inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
              ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
               "ASAN/MSAN" : "non-hardened"), inst_ratio);

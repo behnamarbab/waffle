@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <iostream>
 
 int main(int argc, char *argv[]) {
     
