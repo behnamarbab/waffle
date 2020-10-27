@@ -1191,15 +1191,19 @@ static inline u8 has_new_bits(u8* virgin_map) {
 static inline u8 has_new_max() {
 
   int ret = 0;
-  for (int i = 0; i < PERF_SIZE; i++){
-      if (unlikely(perf_bits[i])){
-        if (unlikely(perf_bits[i] + *icnt > max_counts[i])) {
-           ret = 1;
-           DEBUG("New max(0x%04x) = %u (earlier was: %u)\n ", i, perf_bits[i], max_counts[i]);
-	         max_counts[i] = perf_bits[i] + *icnt;
-        }
-      }
+  if(max_counts[0] < *icnt) {
+    ret = 1;
+    max_counts[0] = *icnt;
   }
+  // for (int i = 0; i < PERF_SIZE; i++){
+  //     if (unlikely(perf_bits[i])){
+  //       if (unlikely(perf_bits[i] + *icnt > max_counts[i])) {
+  //          ret = 1;
+  //          DEBUG("New max(0x%04x) = %u (earlier was: %u)\n ", i, perf_bits[i], max_counts[i]);
+	//          max_counts[i] = perf_bits[i] + *icnt;
+  //       }
+  //     }
+  // }
   
   return ret;
 
@@ -3277,8 +3281,10 @@ static void perform_dry_run(char** argv) {
   OKF("All test cases processed.");
 
   if (max_ct_fuzzing) {
-  DEBUG("======== Starting Keys ========\n");
-    for (u32 k=0; k < PERF_SIZE; k++){
+    DEBUG("======== Starting Keys ========\n");
+
+    // TODO k<PERF_SIZE
+    for (u32 k=0; k < 1; k++){
       // if there is a non-zero score at this index.. 
       if (max_counts[k]){
           DEBUG("At key %d, val is %d\n", k, max_counts[k]);
@@ -4614,8 +4620,8 @@ static void show_stats(void) {
   
   sprintf(tmp, "%lld", stackScore_max);
 
-  SAYF (bSTG bV bSTOP "  Recurs depth : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
-  
+  SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
+                                      //
   /* end */
 
   /* Aaaalmost there... hold on! */
@@ -5422,7 +5428,8 @@ static u8 too_stale(){
 
 
     /* increment staleness and find my min staleness/overall max staleness */
-    for (u32 k=0; k < PERF_SIZE; k++){
+    // TODO k<PERF_SIZE
+    for (u32 k=0; k < 1; k++){
 
       // if there is a non-zero score at this index.. 
       if (max_counts[k]){
@@ -5492,8 +5499,9 @@ static u8 fuzz_one(char** argv) {
   u8  a_collect[MAX_AUTO_EXTRA];
   u32 a_len = 0;
 
-  u32 orig_max_counts[PERF_SIZE];
-  memcpy(orig_max_counts, max_counts, PERF_SIZE*sizeof(u32));
+  // u32 orig_max_counts[PERF_SIZE];
+  // memcpy(orig_max_counts, max_counts, PERF_SIZE*sizeof(u32));
+  max_counts[0] = 0;
 
 #ifdef IGNORE_FINDS
 
@@ -7187,8 +7195,10 @@ abandon_entry:
   /* update staleness accordingly */
   if (max_ct_fuzzing && prioritize_less_stale) {
 
-    for (s32 k=0; k < PERF_SIZE; k++)
-      if (max_counts[k] > orig_max_counts[k]){
+    // todo k<PERF_SIZE
+    for (s32 k=0; k < 1; k++)
+      // Todo orig_max_counts[k]
+      if (max_counts[k] > 0){
         DEBUG("key %d is not stale\n", k);
         staleness[k] = 0;
       }
