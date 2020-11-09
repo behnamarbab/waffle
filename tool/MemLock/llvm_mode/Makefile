@@ -69,9 +69,9 @@ ifeq "$(origin CC)" "default"
 endif
 
 ifndef AFL_TRACE_PC
-  PROGS      = ../memlock-stack-clang ../memlock-heap-clang ../afl-llvm-pass-stack.so ../afl-llvm-pass-heap.so ../afl-catch-dlclose.so ../afl-llvm-rt-stack.o ../afl-llvm-rt-stack-32.o ../afl-llvm-rt-stack-64.o ../afl-llvm-rt-heap.o ../afl-llvm-rt-heap-32.o ../afl-llvm-rt-heap-64.o ../trace_function_stack.o ../trace_function_heap.o
+  PROGS      = ../afl-clang ../afl-llvm-pass.so ../afl-catch-dlclose.so ../afl-llvm-rt.o ../afl-llvm-rt-32.o ../afl-llvm-rt-64.o ../trace_function_stack.o
 else
-  PROGS      = ../memlock-stack-clang ../memlock-heap-clang ../afl-llvm-rt-stack.o ../afl-llvm-rt-stack-32.o ../afl-llvm-rt-stack-64.o ../afl-llvm-rt-heap.o ../afl-llvm-rt-heap-32.o ../afl-llvm-rt-heap-64.o ../trace_function_stack.o ../trace_function_heap.o
+  PROGS      = ../afl-clang ../afl-llvm-rt.o ../afl-llvm-rt-32.o ../afl-llvm-rt-64.o ../trace_function_stack.o
 endif
 
 all: test_deps $(PROGS) test_build all_done
@@ -89,55 +89,33 @@ endif
 	@test -f ../afl-showmap || ( echo "[-] Oops, can't find '../afl-showmap'. Be sure to compile AFL first."; exit 1 )
 	@echo "[+] All set and ready to build."
 
-../memlock-stack-clang: memlock-stack-clang.c | test_deps
+../afl-clang: afl-clang.c | test_deps
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
-	ln -sf memlock-stack-clang ../memlock-stack-clang++
-	
-../memlock-heap-clang: memlock-heap-clang.c | test_deps
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
-	ln -sf memlock-heap-clang ../memlock-heap-clang++
+	ln -sf afl-clang ../afl-clang++
 	
 ../trace_function_stack.o: trace_function_stack.c | test_deps
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
-	
-../trace_function_heap.o: trace_function_heap.c | test_deps
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
-../afl-llvm-pass-stack.so: afl-llvm-pass-stack.so.cc | test_deps
-	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
-
-../afl-llvm-pass-heap.so: afl-llvm-pass-heap.so.cc | test_deps
+../afl-llvm-pass.so: afl-llvm-pass.so.cc | test_deps
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
 	
 ../afl-catch-dlclose.so: afl-catch-dlclose.so.c | test_deps
 	$(CC) $(CFLAGS) -fPIC -shared $< -o $@
 
-../afl-llvm-rt-stack.o: afl-llvm-rt-stack.o.c | test_deps
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
-
-../afl-llvm-rt-heap.o: afl-llvm-rt-heap.o.c | test_deps
+../afl-llvm-rt.o: afl-llvm-rt.o.c | test_deps
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 	
-../afl-llvm-rt-stack-32.o: afl-llvm-rt-stack.o.c | test_deps
-	@printf "[*] Building 32-bit variant of the runtime (-m32)... "
-	@$(CC) $(CFLAGS) -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
-	
-../afl-llvm-rt-heap-32.o: afl-llvm-rt-heap.o.c | test_deps
+../afl-llvm-rt-32.o: afl-llvm-rt.o.c | test_deps
 	@printf "[*] Building 32-bit variant of the runtime (-m32)... "
 	@$(CC) $(CFLAGS) -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
-../afl-llvm-rt-stack-64.o: afl-llvm-rt-stack.o.c | test_deps
+../afl-llvm-rt-64.o: afl-llvm-rt.o.c | test_deps
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
 	@$(CC) $(CFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
-
-../afl-llvm-rt-heap-64.o: afl-llvm-rt-heap.o.c | test_deps
-	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
-	@$(CC) $(CFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
-
 
 test_build: $(PROGS)
 	@echo "[*] Testing the CC wrapper and instrumentation output..."
-	unset AFL_USE_ASAN AFL_USE_MSAN AFL_INST_RATIO; AFL_QUIET=1 AFL_PATH=. ../memlock-stack-clang $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
+	unset AFL_USE_ASAN AFL_USE_MSAN AFL_INST_RATIO; AFL_QUIET=1 AFL_PATH=. ../afl-clang $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
 	echo 0 | ../afl-showmap -m none -q -o .test-instr0 ./test-instr
 	echo 1 | ../afl-showmap -m none -q -o .test-instr1 ./test-instr
 	@rm -f test-instr
@@ -145,11 +123,10 @@ test_build: $(PROGS)
 	@echo "[+] All right, the instrumentation seems to be working!"
 
 all_done: test_build
-	@echo "[+] All done! You can now use '../memlock-stack-clang' to compile programs."
+	@echo "[+] All done! You can now use '../afl-clang' to compile programs."
 
 .NOTPARALLEL: clean
 
 clean:
 	rm -f *.o *.so *~ a.out core core.[1-9][0-9]* test-instr .test-instr0 .test-instr1 
-	rm -f $(PROGS) ../memlock-stack-clang++
-	rm -f $(PROGS) ../memlock-heap-clang++
+	rm -f $(PROGS) ../afl-clang++

@@ -48,7 +48,7 @@ static void find_obj(u8* argv0) {
 
   if (afl_path) {
 
-    tmp = alloc_printf("%s/afl-llvm-rt-heap.o", afl_path);
+    tmp = alloc_printf("%s/afl-llvm-rt.o", afl_path);
 
     if (!access(tmp, R_OK)) {
       obj_path = afl_path;
@@ -70,7 +70,7 @@ static void find_obj(u8* argv0) {
     dir = ck_strdup(argv0);
     *slash = '/';
 
-    tmp = alloc_printf("%s/afl-llvm-rt-heap.o", dir);
+    tmp = alloc_printf("%s/afl-llvm-rt.o", dir);
 
     if (!access(tmp, R_OK)) {
       obj_path = dir;
@@ -83,12 +83,12 @@ static void find_obj(u8* argv0) {
 
   }
 
-  if (!access(AFL_PATH "/afl-llvm-rt-heap.o", R_OK)) {
+  if (!access(AFL_PATH "/afl-llvm-rt.o", R_OK)) {
     obj_path = AFL_PATH;
     return;
   }
 
-  FATAL("Unable to find 'afl-llvm-rt-heap.o' or 'afl-llvm-pass-heap.so'. Please set AFL_PATH");
+  FATAL("Unable to find 'afl-llvm-rt.o' or 'afl-llvm-pass.so'. Please set AFL_PATH");
  
 }
 
@@ -105,7 +105,7 @@ static void edit_params(u32 argc, char** argv) {
   name = strrchr(argv[0], '/');
   if (!name) name = argv[0]; else name++;
 
-  if (!strcmp(name, "memlock-heap-clang++")) {
+  if (!strcmp(name, "afl-clang++")) {
     u8* alt_cxx = getenv("AFL_CXX");
     cc_params[0] = alt_cxx ? alt_cxx : (u8*)"clang++";
   } else {
@@ -114,7 +114,7 @@ static void edit_params(u32 argc, char** argv) {
   }
 
   /* There are two ways to compile afl-clang-fast. In the traditional mode, we
-     use afl-llvm-pass-heap.so to inject instrumentation. In the experimental
+     use afl-llvm-pass-stack.so to inject instrumentation. In the experimental
      'trace-pc-guard' mode, we use native LLVM instrumentation callbacks
      instead. The latter is a very recent addition - see:
 
@@ -128,11 +128,11 @@ static void edit_params(u32 argc, char** argv) {
   cc_params[cc_par_cnt++] = "-Xclang";
   cc_params[cc_par_cnt++] = "-load";
   cc_params[cc_par_cnt++] = "-Xclang";
-  cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass-heap.so", obj_path);
+  cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass.so", obj_path);
 #endif /* ^USE_TRACE_PC */
 
   cc_params[cc_par_cnt++] = "-Qunused-arguments";
-  cc_params[cc_par_cnt++] = alloc_printf("%s/trace_function_heap.o", obj_path);
+  cc_params[cc_par_cnt++] = alloc_printf("%s/trace_function_stack.o", obj_path);
 
   /* Detect stray -v calls from ./configure scripts. */
 
@@ -283,11 +283,11 @@ static void edit_params(u32 argc, char** argv) {
     switch (bit_mode) {
 
       case 0:
-        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-heap.o", obj_path);
+        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt.o", obj_path);
         break;
 
       case 32:
-        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-heap-32.o", obj_path);
+        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-32.o", obj_path);
 
         if (access(cc_params[cc_par_cnt - 1], R_OK))
           FATAL("-m32 is not supported by your compiler");
@@ -295,7 +295,7 @@ static void edit_params(u32 argc, char** argv) {
         break;
 
       case 64:
-        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-heap-64.o", obj_path);
+        cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-64.o", obj_path);
 
         if (access(cc_params[cc_par_cnt - 1], R_OK))
           FATAL("-m64 is not supported by your compiler");
@@ -318,9 +318,9 @@ int main(int argc, char** argv) {
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
 #ifdef USE_TRACE_PC
-    SAYF(cCYA "MemLock-heap-fuzzer: memlock-heap-clang [tpcg] " cBRI VERSION  cRST " by <wcventure@126.com>\n");
+    SAYF(cCYA "MemLock-stack-fuzzer: memlock-stack-clang [tpcg] " cBRI VERSION  cRST " by <wcventure@126.com>\n");
 #else
-    SAYF(cCYA "MemLock-heap-fuzzer: memlock-heap-clang " cBRI VERSION  cRST " by <wcventure@126.com>\n");
+    SAYF(cCYA "MemLock-stack-fuzzer: memlock-stack-clang " cBRI VERSION  cRST " by <wcventure@126.com>\n");
 #endif /* ^USE_TRACE_PC */
 
   }
@@ -332,8 +332,8 @@ int main(int argc, char** argv) {
          "for clang, letting you recompile third-party code with the required runtime\n"
          "instrumentation. A common use pattern would be one of the following:\n\n"
 
-         "  CC=%s/afl-clang-heap ./configure\n"
-         "  CXX=%s/afl-clang-heap++ ./configure\n\n"
+         "  CC=%s/afl-clang-fast ./configure\n"
+         "  CXX=%s/afl-clang-fast++ ./configure\n\n"
 
          "In contrast to the traditional afl-clang tool, this version is implemented as\n"
          "an LLVM pass and tends to offer improved performance with slow programs.\n\n"

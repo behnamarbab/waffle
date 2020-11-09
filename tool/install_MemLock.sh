@@ -32,6 +32,7 @@ cd ${ROOT_DIR}/tool/MemLock
 make clean
 make
 cd ${ROOT_DIR}/tool/MemLock/llvm_mode
+make clean
 make
 cd ${ROOT_DIR}/tool/MemLock
 make install
