@@ -15,7 +15,7 @@ fi
 
 set -eux
 
-LINUX_VER=${LINUX_VER:-ubuntu-16.04}
+LINUX_VER=${LINUX_VER:-ubuntu-xenial}
 LLVM_VER=${LLVM_VER:-6.0.1}
 PREFIX=${ROOT_DIR}
 
