@@ -15,12 +15,12 @@ fi
 
 set -euxo pipefail
 
-if ! [ -d "${ROOT_DIR}/clang+llvm"  ]; then
-	${ROOT_DIR}/tool/install_llvm.sh
-fi
+# if ! [ -d "${ROOT_DIR}/clang+llvm"  ]; then
+# 	${ROOT_DIR}/tool/install_llvm.sh
+# fi
 
-export PATH=${ROOT_DIR}/clang+llvm/bin:$PATH
-export LD_LIBRARY_PATH=${ROOT_DIR}/clang+llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+# export PATH=${ROOT_DIR}/clang+llvm/bin:$PATH
+# export LD_LIBRARY_PATH=${ROOT_DIR}/clang+llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export CC=clang
 export CXX=clang++
 
