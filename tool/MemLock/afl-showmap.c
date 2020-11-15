@@ -141,7 +141,7 @@ static void setup_shm(void) {
 
   u8* shm_str;
 
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + PERF_SIZE*sizeof(u32) + sizeof(u32), IPC_CREAT | IPC_EXCL | 0600);
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + PERF_SIZE*sizeof(u32) + ICNT_SIZE*sizeof(u32), IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
 
@@ -230,7 +230,7 @@ static u32 write_results(void) {
 /* Handle timeout signal. */
 
 static void handle_timeout(int sig) {
-  // OKF("TIMEOUT?!");
+
   child_timed_out = 1;
   if (child_pid > 0) kill(child_pid, SIGKILL);
 
@@ -774,8 +774,6 @@ int main(int argc, char** argv) {
     OKF("Captured %u tuples in '%s'." cRST, tcnt, out_file);
 
   }
-
-  OKF("Exit code: %d", child_crashed * 2 + child_timed_out);
 
   exit(child_crashed * 2 + child_timed_out);
 
