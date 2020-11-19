@@ -19,8 +19,8 @@ LINUX_VER=${LINUX_VER:-ubuntu-16.04}
 LLVM_VER=${LLVM_VER:-6.0.1}
 PREFIX=${ROOT_DIR}
 
-LLVM_DEP_URL=https://releases.llvm.org/${LLVM_VER}
-TAR_NAME=clang+llvm-${LLVM_VER}-x86_64-linux-gnu-${LINUX_VER}
+# LLVM_DEP_URL=https://releases.llvm.org/${LLVM_VER}
+# TAR_NAME=clang+llvm-${LLVM_VER}-x86_64-linux-gnu-${LINUX_VER}
 
 # wget -c ${LLVM_DEP_URL}/${TAR_NAME}.tar.xz
 # tar -C ${PREFIX} -xf ${TAR_NAME}.tar.xz
