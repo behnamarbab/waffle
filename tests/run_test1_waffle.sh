@@ -13,64 +13,50 @@ else
     ROOT_DIR=$(dirname $(dirname $BIN_PATH))
 fi
 
-# if ! [ -d "${ROOT_DIR}/tool/MemLock/build/bin" ]; then
-#     ${ROOT_DIR}/tool/install_MemLock.sh
-# fi
-
 echo "Make Clean Install!"
 
-export PATH=${ROOT_DIR}/clang+llvm/bin:$PATH
-export LD_LIBRARY_PATH=${ROOT_DIR}/clang+llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export AFL_PATH=${ROOT_DIR}/tool/MemLock
 export TEST_DIR=${ROOT_DIR}/tests/test1
 
-if ! [ $(command llvm-config --version) = "6.0.1" ]; then
-    echo ""
-    echo "You can simply run tool/build_MemLock.sh to build the environment."
-    echo ""
-    echo "Please set:"
-    echo "export PATH=$PREFIX/clang+llvm/bin:\$PATH"
-    echo "export LD_LIBRARY_PATH=$PREFIX/clang+llvm/lib:\$LD_LIBRARY_PATH"
-elif ! [ -d "${ROOT_DIR}/clang+llvm/bin"  ]; then
-    echo ""
-    echo "You can simply run tool/build_MemLock.sh to build the environment."
-    echo ""
-    echo "Please set:"
-    echo "export PATH=$PREFIX/clang+llvm/bin:\$PATH"
-    echo "export LD_LIBRARY_PATH=$PREFIX/clang+llvm/lib:\$LD_LIBRARY_PATH"
-else
-
-    echo "----------------"
-    echo "Making Waffle..."
-    echo "----------------"
-    make -C ${AFL_PATH}
-
-    echo "--------------"
-    echo "Making LLVM..."
-    echo "--------------"
-
-    make -C ${AFL_PATH}/llvm_mode
-
-    cd ${TEST_DIR}
-    # Compile using llvm
-    ${AFL_PATH}/memlock-stack-clang -g -O0 -fsanitize=address example1.c -o example1MemLock
-    if [ -d "${TEST_DIR}/in"  ]; then
-        rm -rf in
-    fi
-    mkdir in
-    echo a > in/testcase
-    i=0
-    for ((i=1; i<100; i++))
-    do
-        if ! [ -d "${TEST_DIR}/out_MemLock$i" ]; then
-            break
-        fi
-    done
-    echo "Execute the fuzzing..."
-    # export ASAN_OPTIONS=detect_odr_violation=0:allocator_may_return_null=1:abort_on_error=1:symbolize=0:detect_leaks=0
-    ${AFL_PATH}/memlock-stack-fuzz -i ${TEST_DIR}/in -o ${TEST_DIR}/out_MemLock$i -m none -d -t 5000 -- ${TEST_DIR}/example1MemLock @@ || true
-    echo "Execute the afl-showmap..."
-    ss=$(echo 0 | ${AFL_PATH}/afl-showmap -m none -q -o .example1Memlock ${TEST_DIR}/example1MemLock) || true
-    echo "-------- $ss"
-    echo
+if [ -d "/tmp/waffle_tests/test1"  ]; then
+    rm -rf /tmp/waffle_tests/test1
 fi
+
+mkdir -p /tmp/waffle_tests/test1
+
+cp -r ${TEST_DIR} /tmp/waffle_tests
+export TMP_TEST_DIR=/tmp/waffle_tests/test1
+
+echo "----------------"
+echo "Making Waffle..."
+echo "----------------"
+make -C ${AFL_PATH}
+
+echo "--------------"
+echo "Making LLVM..."
+echo "--------------"
+make -C ${AFL_PATH}/llvm_mode
+
+cd ${TMP_TEST_DIR}
+ls
+# Compile using llvm
+${AFL_PATH}/memlock-stack-clang -g -O0 -fsanitize=address example1.c -o example1Waffle
+if [ -d "${TEST_DIR}/in"  ]; then
+    rm -rf in
+fi
+mkdir in
+echo a > in/testcase
+i=0
+for ((i=1; i<100; i++))
+do
+    if ! [ -d "${TEST_DIR}/out_Waffle$i" ]; then
+        break
+    fi
+done
+echo "Execute the fuzzing..."
+# export ASAN_OPTIONS=detect_odr_violation=0:allocator_may_return_null=1:abort_on_error=1:symbolize=0:detect_leaks=0
+${AFL_PATH}/memlock-stack-fuzz -i ${TEST_DIR}/in -o ${TEST_DIR}/out_Waffle$i -m none -d -t 5000 -- ${TEST_DIR}/example1Waffle @@ || true
+# echo "Execute the afl-showmap..."
+# ss=$(echo 0 | ${AFL_PATH}/afl-showmap -m none -q -o .example1Waffle ${TEST_DIR}/example1Waffle) || true
+echo "-------- $ss"
+echo
