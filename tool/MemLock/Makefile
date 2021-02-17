@@ -46,7 +46,7 @@ ifeq "$(findstring clang, $(shell $(CC) --version 2>/dev/null))" ""
 else
   TEST_CC   = afl-clang
 endif
-TEST_CC = afl-clang
+# TEST_CC = memlock-stack-clang
 
 COMM_HDR    = alloc-inl.h config.h debug.h types.h
 

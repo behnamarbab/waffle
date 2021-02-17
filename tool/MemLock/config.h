@@ -321,12 +321,12 @@
 /* Map size of the performance bits. These are fine-grained performance
  * profiles (e.g. branch counts or malloc counts).
  */
-#define PERF_SIZE_POW2      14
+#define PERF_SIZE_POW2      13
 #define PERF_SIZE           (1 << PERF_SIZE_POW2)
 
 // Size of the array of counters for each type of instruction
 
-#define ICNT_SIZE_POW2      8
+#define ICNT_SIZE_POW2      13
 #define ICNT_SIZE           (1 << ICNT_SIZE_POW2)
 
 /* Maximum allocator request size (keep well under INT_MAX): */
