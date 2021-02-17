@@ -163,6 +163,7 @@ EXP_ST u32* icnt_bits;                /* ICNT - SHM with 3rd variable     */
 EXP_ST u32 max_icnts[ICNT_SIZE];      /* ICNT - keeps track of max value  */
 EXP_ST u64 total_icnt;
 EXP_ST u64 max_total_icnt;
+EXP_ST u8* last_method;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -1112,11 +1113,14 @@ static inline u8 has_new_max(u8 t) {
   }
 
   for (int i = 0; i < sz; i++) {
-    if (unlikely(pbits[i])) {
-      if (unlikely(pbits[i] > mx_count[i])) {
-          ret = 1;
-          DEBUG("Method: %u New max(0x%04x) = %u (earlier was: %u)\n ", t, i, pbits[i], mx_count[i]);
-          mx_count[i] = pbits[i];
+    if (unlikely(pbits[i]) && unlikely(pbits[i] > mx_count[i])) {
+      if(likely(ret<2)) {
+        ret = 2;
+        // DEBUG("Method: %u New max(0x%04x) = %u (earlier was: %u)\n ", t, i, pbits[i], mx_count[i]);
+        mx_count[i] = pbits[i];
+      }
+      else {
+        ret = 1;
       }
     }
   }
@@ -2244,6 +2248,7 @@ static void destroy_extras(void) {
 EXP_ST void init_forkserver(char** argv) {
 
   max_total_icnt = 0;
+  last_method = method_stage;
 
   static struct itimerval it;
   int st_pipe[2], ctl_pipe[2];
@@ -3434,7 +3439,7 @@ static void write_crash_readme(void) {
 static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
   u8  *fn = "";
-  u8  hnb;
+  u8  hnb = 0;
   u8  hnm_perf = 0;
   u8  hnm_icnt = 0;
   s32 fd;
@@ -3446,10 +3451,16 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. PERF: also keep if there is a new max*/
 
-    hnb = has_new_bits(virgin_bits);
+    if(check_stage(METH_AFL)){
+      hnb |= has_new_bits(virgin_bits);
+    }
     // are there some subtleties here of when the max should be set? TODO
-		hnm_perf = has_new_max(METH_MEM);
-    hnm_icnt = has_new_max(METH_WFL);
+    if(check_stage(METH_AFL)){
+		  hnb |= has_new_max(METH_MEM);
+    }
+    if(check_stage(METH_AFL)){
+      hnb |= has_new_max(METH_WFL);
+    }
 
     // if (!hnb && !hnm_perf && !hnm_icnt) { //(wcventure)
     if (!hnb) { //(wcventure)
@@ -3477,8 +3488,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 		delete_from_queue(cksum);
 		add_to_queue(fn, len, 0);
 	}
-    
-  if (hnb == 2) {
+  // ! maybe has_new_cov could be different for each stage
+  if (hnb && 2) {
     queue_top->has_new_cov = 1;
     queued_with_cov++;
   }
@@ -4512,6 +4523,7 @@ static void show_stats(void) {
   }
 
   /* Show a warning about slow execution. */
+  // │  exec speed : 3357/sec              │  total tmouts : 0 (0 unique)           │
 
   if (avg_exec < 100) {
 
@@ -4533,13 +4545,24 @@ static void show_stats(void) {
   SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-22s " bSTG bV "\n", tmp);
 
   /* start: print Recursive depth (wcventure) */
-  sprintf(tmp, "     ");
-  SAYF(bV bSTOP "               " cRST "%-21s ", tmp);
-  //            ^               ^
+  // │                                     │  Total insts  : 54                     │
+
+  u8 *method_stage_name = "AFL";
+
+  if(check_stage(METH_WFL)) {
+    method_stage_name = "Waffle";
+  } else
+  if(check_stage(METH_MEM)) {
+    method_stage_name = "Memlock";
+  }
+
+  SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
+  //            ^             : ^
   if(max_total_icnt < total_icnt) {
     max_total_icnt = total_icnt;
+    last_method = method_stage_name;
   }
-  sprintf(tmp, "%lld", max_total_icnt);
+  sprintf(tmp, "%s - %s", DI(max_total_icnt), last_method);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -8586,7 +8609,12 @@ int main(int argc, char** argv) {
   queued_deadNum = 0;// (wcventure)
   queue_pre = NULL;
 
+  u8 stages[] = {METH_AFL, METH_MEM, METH_WFL};
+
   while (1) {
+    u64 cur_time = get_cur_time();
+    u8 stage_index = (cur_time / (1000 * 3) % sizeof(stages));
+    method_stage = stages[stage_index];
 
     u8 skipped_fuzz;
 
@@ -8642,7 +8670,7 @@ int main(int argc, char** argv) {
     if (stop_soon) break;
 
     queue_pre = queue_cur;
-	queue_cur = queue_cur->next;
+	  queue_cur = queue_cur->next;
     current_entry++;
 
   }

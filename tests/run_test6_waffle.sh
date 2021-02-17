@@ -16,16 +16,16 @@ fi
 echo "Make Clean Install!"
 
 export AFL_PATH=${ROOT_DIR}/tool/MemLock
-export TEST_DIR=${ROOT_DIR}/tests/test1
+export TEST_DIR=${ROOT_DIR}/tests/test6
 
-if [ -d "/tmp/waffle_tests/test1"  ]; then
-    rm -rf /tmp/waffle_tests/test1
+if [ -d "/tmp/waffle_tests/test6"  ]; then
+    rm -rf /tmp/waffle_tests/test6
 fi
 
-mkdir -p /tmp/waffle_tests/test1
+mkdir -p /tmp/waffle_tests/test6
 
 cp -r ${TEST_DIR} /tmp/waffle_tests
-export TMP_TEST_DIR=/tmp/waffle_tests/test1
+export TMP_TEST_DIR=/tmp/waffle_tests/test6
 
 echo "----------------"
 echo "Making Waffle..."
@@ -40,10 +40,7 @@ make -C ${AFL_PATH}/llvm_mode
 cd ${TMP_TEST_DIR}
 ls
 # Compile using llvm
-${AFL_PATH}/memlock-stack-clang -g -O0 -fsanitize=address example.c -o example1Waffle
-ls
-pwd
-echo "----------------------------------------hahahahahah"
+${AFL_PATH}/memlock-stack-clang++ -g -O0 -fsanitize=address example.cpp -o example6Waffle
 if [ -d "${TMP_TEST_DIR}/in"  ]; then
     rm -rf in
 fi
@@ -58,8 +55,8 @@ do
 done
 echo "Execute the fuzzing..."
 # export ASAN_OPTIONS=detect_odr_violation=0:allocator_may_return_null=1:abort_on_error=1:symbolize=0:detect_leaks=0
-${AFL_PATH}/memlock-stack-fuzz -i ${TMP_TEST_DIR}/in -o ${TMP_TEST_DIR}/out_Waffle$i -m none -d -t 5000 -- ${TMP_TEST_DIR}/example1Waffle @@ || true
+${AFL_PATH}/memlock-stack-fuzz -i ${TMP_TEST_DIR}/in -o ${TMP_TEST_DIR}/out_Waffle$i -m none -d -t 5000 -- ${TMP_TEST_DIR}/example6Waffle @@ || true
 # echo "Execute the afl-showmap..."
-# ss=$(echo 0 | ${AFL_PATH}/afl-showmap -m none -q -o .example1Waffle ${TEST_DIR}/example1Waffle) || true
-echo "-------- $ss"
+# ss=$(echo 0 | ${AFL_PATH}/afl-showmap -m none -q -o .example6Waffle ${TEST_DIR}/example6Waffle) || true
+# echo "-------- $ss"
 echo
