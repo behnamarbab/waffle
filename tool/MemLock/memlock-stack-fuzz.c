@@ -2248,7 +2248,7 @@ static void destroy_extras(void) {
 EXP_ST void init_forkserver(char** argv) {
 
   max_total_icnt = 0;
-  last_method = method_stage;
+  last_method = "AFL";
 
   static struct itimerval it;
   int st_pipe[2], ctl_pipe[2];
@@ -3202,18 +3202,6 @@ static void perform_dry_run(char** argv) {
   }
 
   OKF("All test cases processed.");
-
-  // if (method_stage) {
-  //   DEBUG("======== Starting Keys ========\n");
-
-  //   // TODO k<PERF_SIZE
-  //   for (u32 k=0; k < 1; k++){
-  //     // if there is a non-zero score at this index.. 
-  //     if (max_counts[k]){
-  //         DEBUG("At key %d, val is %d\n", k, max_counts[k]);
-  //     }
-  //   }
-  // }
 
 }
 
@@ -8297,14 +8285,19 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+zspN:chi:o:f:m:t:T:dnCB:S:M:x:Q")) > 0)
+  while ((opt = getopt(argc, argv, "+zspN:chi:o:f:m:t:T:dnCB:S:M:x:Qa:")) > 0)
 
     switch (opt) {
 
-      case 'p':
-        SAYF("Max count fuzzing...\n");
-        method_stage = 1;
+      case 'a':
+        if (sscanf(optarg, "%u", &method_stage) < 1 ||
+              optarg[0] == '-') FATAL("Bad syntax used for -t");
         break;
+
+      // case 'p':
+      //   SAYF("Max count fuzzing...\n");
+      //   method_stage = 7;
+      //   break;
       
       case 's':
         SAYF("Prioritizing less stale inputs...\n");
@@ -8615,6 +8608,7 @@ int main(int argc, char** argv) {
     u64 cur_time = get_cur_time();
     u8 stage_index = (cur_time / (1000 * 3) % sizeof(stages));
     method_stage = stages[stage_index];
+    // method_stage = stages[METH_WFL];
 
     u8 skipped_fuzz;
 
