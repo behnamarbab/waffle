@@ -65,7 +65,7 @@ if [ "$2" = "m" ]; then
         rm -rf in
     fi
     mkdir in
-    echo a > in/testcase
+    echo abcdefghijklm > in/testcase
 fi
 i=0
 # for ((i=1; i<100; i++))
@@ -81,11 +81,12 @@ FUZZ_COMMAND=${AFL_PATH}/${CLANG_PRE}fuzz
 EXEC_PATH=${TMP_TEST_DIR}/example6${FUZZ_NAME}
 
 if [ "$2" = "m" ]; then 
+    "----- ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@"
     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@
 else
+    "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@
 fi
-
 
 
 # export ASAN_OPTIONS=detect_odr_violation=0:allocator_may_return_null=1:abort_on_error=1:symbolize=0:detect_leaks=0

@@ -56,13 +56,15 @@ int main(int argc, char **argv) {
         arr[i] = int(s[i])%ASIZE;
     }
 
-    quickSort(arr, 0, 9);
+    quickSort(arr, 0, ASIZE-1);
 
-    if(total_swaps > 100){
-        return 10000/(total_swaps/1000);
+    cout << "Total swapss: " << total_swaps << endl;
+
+    if(total_swaps>10000) {
+        throw 99;
     }
     
-    cout << "Total swaps: " << total_swaps << endl;
+    
 
     return 0;
 }
