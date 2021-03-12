@@ -329,6 +329,9 @@
 #define ICNT_SIZE_POW2      13
 #define ICNT_SIZE           (1 << ICNT_SIZE_POW2)
 
+#define MAX_CNT_MULT        1.05
+#define MAX_FAV_MULT        1.10
+
 /* Maximum allocator request size (keep well under INT_MAX): */
 
 #define MAX_ALLOC           0x40000000

@@ -156,14 +156,10 @@ static s32 forksrv_pid,               /* PID of the fork server           */
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
 EXP_ST u32* perf_bits;                /* PERF - SHM with 2nd (perf) map   */
-EXP_ST u32 max_counts[PERF_SIZE];     /* PERF - keeps track of max value  */
 EXP_ST u32 staleness[PERF_SIZE];      /* PERF - the staleness max values  */
 
 EXP_ST u32* icnt_bits;                /* ICNT - SHM with 3rd variable     */
 EXP_ST u32 max_icnts[ICNT_SIZE];      /* ICNT - keeps track of max value  */
-EXP_ST u64 total_icnt;
-EXP_ST u64 max_total_icnt;
-EXP_ST u8* last_method;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -276,8 +272,9 @@ struct queue_entry {
 
   u64 exec_us,                        /* Execution time (us)              */
       handicap,                       /* Number of queue cycles behind    */
-      stackScore,                      /* Added: sizeScore (wcventure)    */
-      depth;                          /* Path depth                       */
+      stackScore,                     /* Added: sizeScore (wcventure)     */
+      depth,                          /* Path depth                       */
+      total_icnt;                    /* Total number of instructions     */
 
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
@@ -291,6 +288,10 @@ static u64 stackScore_cur = 0;         /* Added: cur sizeScore (wcventure)*/
 static u64 MaxCallNum = 0;            /* Added: from file     (wcventure) */
 static u64 MaxContinueCMNum = 0;      /* Added: from file     (wcventure) */
 static u64 stackScore_max = 0;         /* Added: from file     (wcventure)*/
+
+EXP_ST u64 max_total_icnt = 0;
+EXP_ST u64 total_icnt_cur = 0;
+EXP_ST u8* last_method;
 
 static struct queue_entry *queue_dead = NULL; /* dead queue (wcventure)   */
 
@@ -385,13 +386,18 @@ struct sys_data
 {
   unsigned long long int MaxContinueCMNum;
   unsigned long long int MaxCallNum;
+  unsigned long long int MaxInstCount;
 };
 
 struct sys_data* mem_data;                /* SHM (wcventure)  */
 
-void ReadMemStatus(u64* a, u64* b){
+void ReadMemStatus(u64 *a, u64 *b){
   *a = mem_data->MaxContinueCMNum;
   *b = mem_data->MaxCallNum;
+  total_icnt_cur = mem_data->MaxInstCount;
+  if(total_icnt_cur > max_total_icnt) {
+    max_total_icnt = total_icnt_cur;
+  }
 }
 
 // start: 如果没有has_new_bit, 找cuskm一样的，从链表中删除
@@ -410,16 +416,16 @@ void delete_from_queue(u32 cksum){
       if (queue_dead == NULL){//重复的低分cksum的实例加入queue_dead
         queue_dead = de->next;
         de->next->was_fuzzed = 1;
-        de->next->stackScore = -1;//因为next还不能删除，做一个标记，是否是最后一个，避免最后doublefree
+        de->next->total_icnt = -1;//因为next还不能删除，做一个标记，是否是最后一个，避免最后doublefree
       } else {
         //找到queue的最后一个
         struct queue_entry *dead_tmp = queue_dead;
-        while(dead_tmp->stackScore != -1)
+        while(dead_tmp->total_icnt != -1)
           dead_tmp = dead_tmp->next;
-        dead_tmp->stackScore = 0;//0代表不是最后一个的标记
+        dead_tmp->total_icnt = 0;//0代表不是最后一个的标记
         dead_tmp->next = de->next;
         dead_tmp->next->was_fuzzed = 1;
-        dead_tmp->next->stackScore = -1;//因为next还不能删除，做一个标记，是否是最后一个，避免最后doublefree
+        dead_tmp->next->total_icnt = -1;//因为next还不能删除，做一个标记，是否是最后一个，避免最后doublefree
       }
       de->next = temp;
       //queued_paths--;//path总数减一(queued_paths不能减，总数是queued_paths)
@@ -429,8 +435,6 @@ void delete_from_queue(u32 cksum){
     de = de->next;
   }while(de->next != NULL);
 }
-
-
 
 
 void DEBUG (char const *fmt, ...) {
@@ -907,6 +911,7 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
   q->stackScore   = stackScore_cur;
+  q->total_icnt   = total_icnt_cur;
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -953,7 +958,7 @@ EXP_ST void destroy_queue(void) {
   /* start: free the dead queue (wcventure) */
   struct queue_entry *d = queue_dead;
   while (d) {
-    if (d->stackScore == -1){//已经到尾部了
+    if (d->total_icnt == -1){//已经到尾部了
       ck_free(d->fname);
       ck_free(d->trace_mini);
       ck_free(d);  
@@ -1098,22 +1103,26 @@ static inline u8 has_new_max(u8 t) {
   u32 *mx_count;
   u32 sz;
 
-  if(t & METH_MEM) {
+  // if(t & METH_MEM) {
+  //   pbits = icnt_bits;
+  //   mx_count = max_icnts;
+  //   sz = ICNT_SIZE;
+  // }
+  // else 
+  if(t == METH_WFL) {
     pbits = icnt_bits;
     mx_count = max_icnts;
     sz = ICNT_SIZE;
-  }
-  else if(t & METH_MEM) {
-    pbits = perf_bits;
-    mx_count = max_counts;
-    sz = PERF_SIZE;
   }
   else {
     return 0;
   }
 
   for (int i = 0; i < sz; i++) {
-    if (unlikely(pbits[i]) && unlikely(pbits[i] > mx_count[i])) {
+    if(pbits[i]) {
+      // DEBUG("pbits: %d\n", pbits[i]);
+    }
+    if (unlikely(pbits[i]) && unlikely(pbits[i] > MAX_CNT_MULT*mx_count[i])) {
       if(likely(ret<2)) {
         ret = 2;
         // DEBUG("Method: %u New max(0x%04x) = %u (earlier was: %u)\n ", t, i, pbits[i], mx_count[i]);
@@ -1423,66 +1432,48 @@ u8 check_stage(u8 stage) {
   return stage & method_stage;
 }
 
+u8 check_max(u32 cur_icnt){
+  if(max_total_icnt < cur_icnt) {
+    max_total_icnt = cur_icnt;
+    // last_method = method_stage_name;
+  }
+}
+
 static void update_bitmap_score(struct queue_entry* q) {
 
   u32 i;
-  total_icnt = 0;
+  long double fav_factor = log(q->total_icnt) * q->len;
+  // DEBUG("%s\n", q->fname);
+  // DEBUG("fav: %f\n", fav_factor);
+  // DEBUG("total: %u\n", q->total_icnt);
 
-  /* For every byte set in trace(or perf)_bits[], see if there is a previous winner,
+  /* For every byte set in trace_bits[], see if there is a previous winner,
      and how it compares to us. */
-  // ! Waffle
-  for (i = 0; i < ICNT_SIZE; i++) {
+
+  for (i = 0; i < ICNT_SIZE; i++)
+
     if (icnt_bits[i]) {
-      total_icnt += icnt_bits[i];
-      if (top_rated_icnt[i]) {
-        if (icnt_bits[i] < max_icnts[i]) continue;
-      }
-      top_rated_icnt[i] = q;
-      score_changed = 1;
-    }
-  }
-  // ! Memlock
-  /* in the case of max fuzzing, just win if we achieve the max */ 
-  for (i = 0; i < PERF_SIZE; i++) {
-    if (perf_bits[i]) {
-      if (top_rated_perf[i]) {
-        if (perf_bits[i] < max_counts[i]) continue;
-      }
-      /* Insert ourselves as the new winner. */
-      top_rated_perf[i] = q;
-      /* if we get here, we know that perf_bits[i] == max_counts[i] */
-      score_changed = 1;
-    }
-  }
 
-  // ! AFL
-  u64 fav_factor = q->exec_us * q->len;
-  for (i = 0; i < MAP_SIZE; i++) {
-    if (unlikely(trace_bits[i])) {    
-      if (top_rated[i]) {
-        /* Faster-executing or smaller test cases are favored. */
-        if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
+       if (top_rated_icnt[i]) {
 
-        /* Looks like we're going to win. Decrease ref count for the
-            previous winner, discard its trace_bits[] if necessary. */
-        if (!--top_rated[i]->tc_ref) {
-          ck_free(top_rated[i]->trace_mini);
-          top_rated[i]->trace_mini = 0;
-        }
-      }
+         /* Faster-executing or smaller test cases are favored. */
+        //  DEBUG("top_rated: %f\n", log(top_rated_icnt[i]->total_icnt) * top_rated_icnt[i]->len);
 
-      /* Insert ourselves as the new winner. */
-      top_rated[i] = q;
-      /* change scores accordingly */
-      q->tc_ref++;
+         if (fav_factor > log(top_rated_icnt[i]->total_icnt) * top_rated_icnt[i]->len) continue;
 
-      if (!q->trace_mini) {
-        q->trace_mini = ck_alloc(MAP_SIZE >> 3);
-        minimize_bits(q->trace_mini, trace_bits);
-      }
-      score_changed = 1;
-    }
-  }
+       }
+
+       /* Insert ourselves as the new winner. */
+
+       top_rated_icnt[i] = q;
+
+       score_changed = 1;
+
+     }
+
+  // check_max(q->total_icnt);
+  return;
+
 }
 
 
@@ -1516,6 +1507,7 @@ static void cull_queue(void) {
   for (i = 0; i < ICNT_SIZE; i++) {
     if (top_rated_icnt[i]) {
       /* if top rated for any i, will be favored */
+      // DEBUG("+%d\n", i);
       u8 was_favored_already = top_rated_icnt[i]->favored;
 
       top_rated_icnt[i]->favored = 1;
@@ -1525,55 +1517,58 @@ static void cull_queue(void) {
         queued_favored++;
         if (!top_rated_icnt[i]->was_fuzzed) pending_favored++;
       }
-    }
-  }
-
-  for (i = 0; i < PERF_SIZE; i++) {
-    if (top_rated_perf[i]) {
-      /* if top rated for any i, will be favored */
-      u8 was_favored_already = top_rated_perf[i]->favored;
-
-      top_rated_perf[i]->favored = 1;
-
-      /* increments counts only if not also favored for another i */
-      if (!was_favored_already){
-        queued_favored++;
-        if (!top_rated_perf[i]->was_fuzzed) pending_favored++;
+      else {
+        // DEBUG("-%d\n", i);
       }
     }
   }
+
+  // for (i = 0; i < PERF_SIZE; i++) {
+  //   if (top_rated_perf[i]) {
+  //     /* if top rated for any i, will be favored */
+  //     u8 was_favored_already = top_rated_perf[i]->favored;
+
+  //     top_rated_perf[i]->favored = 1;
+
+  //     /* increments counts only if not also favored for another i */
+  //     if (!was_favored_already){
+  //       queued_favored++;
+  //       if (!top_rated_perf[i]->was_fuzzed) pending_favored++;
+  //     }
+  //   }
+  // }
 
   /* uncovered by favored elements bytes */
-  static u8 temp_v[MAP_SIZE >> 3];
-  memset(temp_v, 255, MAP_SIZE >> 3);
+  // static u8 temp_v[ICNT_SIZE >> 3];
+  // memset(temp_v, 255, ICNT_SIZE >> 3);
 
-  for (i = 0; i < MAP_SIZE; i++) {
+  // for (i = 0; i < ICNT_SIZE; i++) {
 
-    if (top_rated[i]) {
+  //   if (top_rated[i]) {
 
-      if ((temp_v[i >> 3] & (1 << (i & 7)))) {
-        /* Let's see if anything in the bitmap isn't captured in temp_v.
-        If yes, and if it has a top_rated[] contender, let's use it. */
+  //     if ((temp_v[i >> 3] & (1 << (i & 7)))) {
+  //       /* Let's see if anything in the bitmap isn't captured in temp_v.
+  //       If yes, and if it has a top_rated[] contender, let's use it. */
 
-        u32 j = MAP_SIZE >> 3;
+  //       u32 j = ICNT_SIZE >> 3;
 
-        /* Remove all bits belonging to the current entry from temp_v. */
+  //       /* Remove all bits belonging to the current entry from temp_v. */
 
-        while (j--) 
-          if (top_rated[i]->trace_mini[j])
-            temp_v[j] &= ~top_rated[i]->trace_mini[j];
+  //       while (j--) 
+  //         if (top_rated[i]->trace_mini[j])
+  //           temp_v[j] &= ~top_rated[i]->trace_mini[j];
 
-        top_rated[i]->favored = 1;
+  //       top_rated[i]->favored = 1;
         
-        queued_favored++;
+  //       queued_favored++;
 
-        if (!top_rated[i]->was_fuzzed) pending_favored++;
+  //       if (!top_rated[i]->was_fuzzed) pending_favored++;
 
-      }
+  //     }
 
-    }
+  //   }
 
-  }
+  // }
 
 
   q = queue;
@@ -1639,7 +1634,6 @@ EXP_ST void setup_shm(void) {
 
 /* set the max counts map to 0 */
 EXP_ST void setup_max_counts() {
-  memset(max_counts, 0, PERF_SIZE * sizeof(u32));
   memset(max_icnts, 0, ICNT_SIZE * sizeof(u32));
 }
 
@@ -2247,8 +2241,7 @@ static void destroy_extras(void) {
 
 EXP_ST void init_forkserver(char** argv) {
 
-  max_total_icnt = 0;
-  last_method = "AFL";
+  last_method = "Waffle";
 
   static struct itimerval it;
   int st_pipe[2], ctl_pipe[2];
@@ -2707,9 +2700,9 @@ static u8 run_target(char** argv, u32 timeout) {
 #else
   classify_counts((u32*)trace_bits);
 #endif /* ^__x86_64__ */
-  if (method_stage && zero_other_counts) {
-    memset(trace_bits + MAP_SIZE + sizeof(u32), 0, sizeof(u32)*(PERF_SIZE -1));
-  }
+  // if (zero_other_counts) {
+  //   memset(trace_bits + MAP_SIZE + PERF_SIZE*sizeof(u32), 0, sizeof(u32)*ICNT_SIZE);
+  // }
 
   prev_timed_out = child_timed_out;
 
@@ -2860,7 +2853,8 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
        we want to bail out quickly. */
     
     ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-    stackScore_cur = MaxCallNum; // icnt was here MaxCallNum + *icnt
+
+    stackScore_cur = MaxCallNum;
     if (stackScore_cur > stackScore_max)
       stackScore_max = stackScore_cur;
 
@@ -2925,8 +2919,8 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->cal_failed  = 0;
 
   /* start: CountScore (wcventure) */
-  /* stackScore_cur + *icnt */
   q -> stackScore = stackScore_cur;
+  q -> total_icnt = total_icnt_cur;
   /* end: CountScore */
 
   total_bitmap_size += q->bitmap_size;
@@ -3034,16 +3028,17 @@ static void perform_dry_run(char** argv) {
 
     if (res == crash_mode || res == FAULT_NOBITS)
       SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us, stackScore = %llu\n" cRST, 
-           q->len, q->bitmap_size, q->exec_us, q->stackScore);
+           q->len, q->bitmap_size, q->exec_us, q->total_icnt);
 
     switch (res) {
 
       case FAULT_NONE:
-        if (q == queue) check_map_coverage();
+        if (q == queue) {
+          check_map_coverage();
 
-        // Populates the max_counts properly.
-        has_new_max(METH_MEM);
-        has_new_max(METH_WFL);
+          // Populates the max_counts properly.
+          has_new_max(METH_WFL);
+        }
 
         if (crash_mode) FATAL("Test case '%s' does *NOT* crash", fn);
 
@@ -3433,25 +3428,19 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   s32 fd;
   u8  keeping = 0, res;
   u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+  // u32 cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST); 
 
   if (fault == crash_mode) {
 
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. PERF: also keep if there is a new max*/
 
-    if(check_stage(METH_AFL)){
-      hnb |= has_new_bits(virgin_bits);
-    }
+    hnb = has_new_bits(virgin_bits);
     // are there some subtleties here of when the max should be set? TODO
-    if(check_stage(METH_AFL)){
-		  hnb |= has_new_max(METH_MEM);
-    }
-    if(check_stage(METH_AFL)){
-      hnb |= has_new_max(METH_WFL);
-    }
+    hnm_icnt = has_new_max(METH_WFL);
 
     // if (!hnb && !hnm_perf && !hnm_icnt) { //(wcventure)
-    if (!hnb) { //(wcventure)
+    if (!hnb && !hnm_icnt) { //(wcventure)
       if (crash_mode) total_crashes++;
       return 0;
     }    
@@ -3468,7 +3457,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
-    DEBUG("adding %s to queue\n", fn);
+    // DEBUG("Q.add: %02u hnm_icnt: %d\n", queued_paths, hnm_icnt);
 
 	if (queue_cur->exec_cksum == cksum){ // (wcventure)
 		add_to_queue(fn, len, 0);
@@ -3477,7 +3466,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 		add_to_queue(fn, len, 0);
 	}
   // ! maybe has_new_cov could be different for each stage
-  if (hnb && 2) {
+  if (hnm_icnt && 2) {
     queue_top->has_new_cov = 1;
     queued_with_cov++;
   }
@@ -3548,7 +3537,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         u8 new_fault;
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
-
         ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
         stackScore_cur = MaxCallNum; // icnt here
         if (stackScore_cur > stackScore_max)
@@ -4423,6 +4411,8 @@ static void show_stats(void) {
   sprintf(tmp, "%s%s", DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
 
+  // sprintf(tmp, "%s", DI(queued_deadNum));
+
   SAYF(bV bSTOP " last uniq crash : " cRST "%-34s " bSTG bV bSTOP
        " uniq crashes : %s%-6s " bSTG bV "\n",
        DTD(cur_ms, last_crash_time), unique_crashes ? cLRD : cRST,
@@ -4546,11 +4536,8 @@ static void show_stats(void) {
 
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
-  if(max_total_icnt < total_icnt) {
-    max_total_icnt = total_icnt;
-    last_method = method_stage_name;
-  }
-  sprintf(tmp, "%s - %s", DI(max_total_icnt), last_method);
+  
+  sprintf(tmp, "%d - %s", max_total_icnt, last_method);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -4899,10 +4886,8 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
       fault = run_target(argv, exec_tmout);
       trim_execs++;
-
       ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-      stackScore_cur = MaxCallNum; // icnt
-      // stackScore_cur = *icnt ;
+      stackScore_cur = MaxCallNum;
       if (stackScore_cur  > stackScore_max)
         stackScore_max = stackScore_cur;
 
@@ -4913,8 +4898,6 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST);
       exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
-        
-
 
       /* If the deletion had no impact on the trace, make it permanent. This
          isn't perfect for variable-path inputs, but we're just making a
@@ -4922,9 +4905,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
          negatives every now and then.  PERF: Make sure that the performance
          details don't change either. */
 
-      if (exec_cksum == q->exec_cksum && 
-          perf_cksum == q->perf_cksum && 
-          icnt_cksum == q->icnt_cksum   )
+      if (exec_cksum == q->exec_cksum && icnt_cksum == q->icnt_cksum)
       {
         u32 move_tail = q->len - remove_pos - trim_avail;
 
@@ -5009,9 +4990,8 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
 
   fault = run_target(argv, exec_tmout);
-
   ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-  stackScore_cur = MaxCallNum; // icnt
+  stackScore_cur = MaxCallNum;
   if (stackScore_cur > stackScore_max)
     stackScore_max = stackScore_cur;
 
@@ -5156,6 +5136,12 @@ static u32 calculate_score(struct queue_entry* q) {
     default:        perf_score *= 5;
 
   }
+
+  // if (q->total_icnt * 5 > max_total_icnt * 4) perf_score *= 1.5;
+  // else if(q->total_icnt * 5 > max_total_icnt * 3) perf_score *= 1.2;
+  // else if(q->total_icnt * 5 > max_total_icnt * 2) perf_score *= 0.8;
+  // else if(q->total_icnt * 5 > max_total_icnt * 1) perf_score *= 0.5;
+  // else perf_score *= 0.2;
 
   /* Make sure that we don't go over limit. */
 
@@ -5351,77 +5337,6 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 }
 
-// Never used
-static u8 too_stale(){
-
-    u8 maxed_by_input[MAP_SIZE];
-    memset(maxed_by_input, 0, MAP_SIZE);
-
-    /* minimum staleness achieved by current input */
-    u32 my_min_staleness = UINT_MAX;
-
-    /* overall min/max staleness */
-    u32 min_staleness = UINT_MAX;
-    /* start the max at 1 to avoid div by 0 */
-    u32 max_staleness = 1;
-
-
-    /* increment staleness and find my min staleness/overall max staleness */
-    // TODO k<PERF_SIZE
-    for (u32 k=0; k < 1; k++){
-
-      // if there is a non-zero score at this index.. 
-      if (max_counts[k]){
-
-        /* set new overall max or min staleness */
-        max_staleness = (max_staleness < staleness[k]) ? staleness[k] : max_staleness;
-        min_staleness = (min_staleness > staleness[k]) ? staleness[k] : min_staleness;
-
-        // TODO WAT
-        // log the top rated for this one and the staleness
-        if (top_rated[k])
-          DEBUG("There is a top rated at key %d, val is %d, staleness is %d %s\n", k, max_counts[k], staleness[k],
-           (perf_bits[k] == max_counts[k]) ? "(maxed by me)" : ""); // icnt
-
-        /* increment staleness for any score that this input hits the max of.
-           If score is increased while fuzzing input, staleness will be set to 0  */
-        if (perf_bits[k] == max_counts[k]){ // icnt
-
-          my_min_staleness = (staleness[k] < my_min_staleness) ? staleness[k] : my_min_staleness;
-          staleness[k]++;
-          maxed_by_input[k] = 1;
-
-        }
-      }
-    }
-
-    u32 staleness_score;
-    if (!complex_stale)
-      staleness_score = 100 - STALENESS_CONST*(my_min_staleness-min_staleness)/max_staleness;
-    else
-      staleness_score = 100 - STALENESS_CONST*(exp(-((double) my_min_staleness-min_staleness)/ sqrt(max_staleness)) +1);
-
-    DEBUG("my_min_stale: %d, min_stale: %d, max_stale: %d, score: %d\n", my_min_staleness, min_staleness, max_staleness, staleness_score);
-
-    if (staleness_score < UR(100)){
-
-      DEBUG("Skipping because too stale (score: %d, min_stale: %d)\n", staleness_score, min_staleness);
-
-      /* decided to skip the input. remove the increments. */
-      for (u32 k=0; k < PERF_SIZE; k++){
-        if (unlikely(maxed_by_input[k])) {
-          staleness[k]--;
-        }
-      }
-     
-      /* too stale. return 1 */
-      return 1;
-     
-     }
-
-    return 0;
-}
-
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
    skipped or bailed out. */
@@ -5438,10 +5353,6 @@ static u8 fuzz_one(char** argv) {
   u8  a_collect[MAX_AUTO_EXTRA];
   u32 a_len = 0;
 
-  // u32 orig_max_counts[PERF_SIZE];
-  // memcpy(orig_max_counts, max_counts, PERF_SIZE*sizeof(u32));
-  max_counts[0] = 0;
-
 #ifdef IGNORE_FINDS
 
   /* In IGNORE_FINDS mode, skip any entries that weren't in the
@@ -5451,16 +5362,13 @@ static u8 fuzz_one(char** argv) {
 
 #else
 
-  if (pending_favored || queued_favored) {
+  if (pending_favored) {
 
     /* If we have any favored, non-fuzzed new arrivals in the queue,
        possibly skip to them at the expense of already-fuzzed or non-favored
        cases. */
 
-    /* in max count fuzzing mode, queue inputs remain favored even if 
-       they were previously fuzzed */
-
-    if (((queue_cur->was_fuzzed  && !check_stage(METH_ALL)) || !queue_cur->favored) &&
+    if ((queue_cur->was_fuzzed  || !queue_cur->favored) &&
         UR(100) < SKIP_TO_NEW_PROB) return 1;
 
   } else
@@ -5484,9 +5392,6 @@ static u8 fuzz_one(char** argv) {
 
 #endif /* ^IGNORE_FINDS */
 
-  DEBUG("===============Fuzzing test case #%u===============\n",current_entry);
-
-  if (!queue_cur->favored) DEBUG("(Test case is not favored)\n");
   if (not_on_tty) {
     ACTF("Fuzzing test case #%u (%u total, %llu uniq crashes found)...",
          current_entry, queued_paths, unique_crashes);
@@ -5517,26 +5422,6 @@ static u8 fuzz_one(char** argv) {
 
   cur_depth = queue_cur->depth;
 
-  /*************
-   * STALENESS *
-   ************/
-
-  /* Computing staleness */
-  // ! always false because of prioritize_less_stale
-  if (method_stage && queue_cur->favored && prioritize_less_stale) {
-
-    /* run to populate the perf_bits */
-    write_to_testcase(in_buf, queue_cur->len);
-    run_target(argv, exec_tmout);
-    if (too_stale()) {
-      munmap(orig_in, queue_cur->len);
-      if (in_buf != orig_in) ck_free(in_buf);
-      ck_free(out_buf);
-      return 1; 
-    } 
-
-  }
-
   /*******************************************
    * CALIBRATION (only if failed earlier on) *
    *******************************************/
@@ -5546,6 +5431,8 @@ static u8 fuzz_one(char** argv) {
     u8 res = FAULT_TMOUT;
 
     if (queue_cur->cal_failed < CAL_CHANCES) {
+
+      queue_cur->icnt_cksum = 0;
 
       res = calibrate_case(argv, queue_cur, in_buf, queue_cycle - 1, 0);
 
@@ -5565,8 +5452,8 @@ static u8 fuzz_one(char** argv) {
    * TRIMMING *
    ************/
 
-  /*if (!dumb_mode && !queue_cur->trim_done) {
-
+  if (!dumb_mode && !queue_cur->trim_done) {
+    // ! Trimming must be done!
     u8 res = trim_case(argv, queue_cur, in_buf);
 
     if (res == FAULT_ERROR)
@@ -5583,7 +5470,7 @@ static u8 fuzz_one(char** argv) {
 
     if (len != queue_cur->len) len = queue_cur->len;
 
-  }*/
+  }
 
   memcpy(out_buf, in_buf, len);
 
@@ -5836,7 +5723,7 @@ static u8 fuzz_one(char** argv) {
         icnt_cksum = ~queue_cur->icnt_cksum;
       }
 
-      if ((exec_cksum!=queue_cur->exec_cksum) || perf_cksum!=queue_cur->perf_cksum || icnt_cksum!=queue_cur->icnt_cksum) {
+      if ((exec_cksum!=queue_cur->exec_cksum) || icnt_cksum!=queue_cur->icnt_cksum) {
         eff_map[EFF_APOS(stage_cur)] = 1;
         eff_cnt++;
       }
@@ -7135,19 +7022,6 @@ abandon_entry:
     if (queue_cur->favored) pending_favored--;
   } 
 
-  /* update staleness accordingly */
-  // ! never true
-  if (method_stage && prioritize_less_stale) {
-    // todo k<PERF_SIZE
-    for (s32 k=0; k < 1; k++)
-      // Todo orig_max_counts[k]
-      if (max_counts[k] > 0){
-        DEBUG("key %d is not stale\n", k);
-        staleness[k] = 0;
-      }
-
-  }
-
   munmap(orig_in, queue_cur->len);
 
   if (in_buf != orig_in) ck_free(in_buf);
@@ -7267,9 +7141,8 @@ static void sync_fuzzers(char** argv) {
         write_to_testcase(mem, st.st_size);
 
         fault = run_target(argv, exec_tmout);
-
         ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-        stackScore_cur = MaxCallNum; // icnt
+        stackScore_cur = MaxCallNum;
         if (stackScore_cur > stackScore_max)
           stackScore_max = stackScore_cur;
 
@@ -8251,21 +8124,6 @@ static void save_cmdline(u32 argc, char** argv) {
 /* Main entry point */
 
 int main(int argc, char** argv) {
-	
-  /* start: init top_mem (wcventure) 
-  struct queue_entry* zeorScoreEntry = ck_alloc(sizeof(struct queue_entry));
-  zeorScoreEntry->fname        = "NULL";
-  zeorScoreEntry->len          = 0;
-  zeorScoreEntry->depth        = 0;
-  zeorScoreEntry->passed_det   = 0;
-  zeorScoreEntry->exec_cksum   = 0;
-  zeorScoreEntry->stackScore   = 0;
-  
-  int ip = 0;
-  for (ip=0; ip < TopMemNum; ip++)
-    top_mem[ip] = zeorScoreEntry;
-
-   end: init top_mem (wcventure) */
 
   s32 opt;
   u64 prev_queued = 0;
@@ -8290,14 +8148,9 @@ int main(int argc, char** argv) {
     switch (opt) {
 
       case 'a':
-        if (sscanf(optarg, "%u", &method_stage) < 1 ||
+        if (sscanf(optarg, "%hhu", &method_stage) < 1 ||
               optarg[0] == '-') FATAL("Bad syntax used for -t");
         break;
-
-      // case 'p':
-      //   SAYF("Max count fuzzing...\n");
-      //   method_stage = 7;
-      //   break;
       
       case 's':
         SAYF("Prioritizing less stale inputs...\n");
@@ -8548,9 +8401,9 @@ int main(int argc, char** argv) {
   setup_max_counts();
 
   // ! Make it work
-  top_rated_perf = ck_alloc(PERF_SIZE * sizeof(struct queue_entry *));
+  // top_rated_perf = ck_alloc(PERF_SIZE * sizeof(struct queue_entry *));
   top_rated_icnt = ck_alloc(ICNT_SIZE * sizeof(struct queue_entry *));
-  top_rated = ck_alloc(MAP_SIZE * sizeof(struct queue_entry *));
+  // top_rated = ck_alloc(MAP_SIZE * sizeof(struct queue_entry *));
 
   init_count_class16();
 
@@ -8602,13 +8455,13 @@ int main(int argc, char** argv) {
   queued_deadNum = 0;// (wcventure)
   queue_pre = NULL;
 
-  u8 stages[] = {METH_AFL, METH_MEM, METH_WFL};
+  u8 stages[] = {METH_WFL, METH_AFL, METH_MEM};
 
   while (1) {
-    u64 cur_time = get_cur_time();
-    u8 stage_index = (cur_time / (1000 * 3) % sizeof(stages));
-    method_stage = stages[stage_index];
-    // method_stage = stages[METH_WFL];
+    // u64 cur_time = get_cur_time();
+    // u8 stage_index = (cur_time / (1000 * 3) % sizeof(stages));
+    // method_stage = stages[stage_index];
+    method_stage = stages[0];
 
     u8 skipped_fuzz;
 

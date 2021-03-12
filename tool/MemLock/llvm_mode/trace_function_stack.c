@@ -23,8 +23,6 @@ static unsigned long long int ContinueCallNum = 1000000; //防溢出
 static unsigned long long int MaxContinueCMNum = 0;
 static unsigned long long int MaxInstCount = 0;
 
-static int flag_icnt = 1;
-
 void __attribute__((constructor)) traceBegin(void) {
   ;
 }
@@ -53,6 +51,8 @@ void __attribute__((destructor)) traceEnd(void) {
       MaxCallNum = 1000000;
     da->MaxContinueCMNum = MaxContinueCMNum-2000000;
 	  da->MaxCallNum = MaxCallNum-1000000;
+    da->MaxInstCount = MaxInstCount;
+    printf("---\n---\n");
   }
 }
 
@@ -69,9 +69,5 @@ void instr_Return () {
 }
 
 void instr_AddInsts(int cnt) {
-  MaxInstCount += cnt;
-  if(flag_icnt==1) {
-    flag_icnt = 0;
-    printf("OK, this seems to be working!");
-  }
+  MaxInstCount += (unsigned long long)cnt;
 }
