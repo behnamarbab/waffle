@@ -1,0 +1,30 @@
+AFL
+
+main
+    initialize the fuzzer
+    while fuzzing is not terminated:
+        cull the queue of tests and update the bitmap
+        select the first entity of the queue, as E
+        fuzz(E)
+
+fuzz
+    calibrate the test case
+    trim the test cases (if needed)
+    calculate the performance score
+    bitflip
+    interesting values and dictionary usage
+    random havoc
+
+
+
+calibrate:
+    /* Calibrate a new test case. This is done when processing the input directory
+   to warn about flaky or otherwise problematic test cases early on; and when
+   new paths are discovered to detect variable behavior and so on. */
+
+trimming:
+    /* Trim all new test cases to save cycles when doing deterministic checks. The
+   trimmer uses power-of-two increments somewhere between 1/16 and 1/1024 of
+   file size, to keep the stage short and sweet. */
+
+

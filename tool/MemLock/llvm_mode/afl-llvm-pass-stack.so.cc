@@ -218,6 +218,12 @@ bool AFLCoverage::runOnModule(Module &M) {
   llvm::Function *instr_ReturnFunc = 
       llvm::Function::Create(funcReturnType, llvm::Function::ExternalLinkage, "instr_Return", &M);
 
+  std::vector<Type *> icnt_args(1, Type::getInt32Ty(context));
+  llvm::FunctionType *icntIncrement =
+      llvm::FunctionType::get(builder.getVoidTy(), icnt_args, false);
+  llvm::Function *icnt_Increment =
+      llvm::Function::Create(icntIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
+
   GlobalVariable *AFLMapPtr =
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_area_ptr");
@@ -259,9 +265,6 @@ bool AFLCoverage::runOnModule(Module &M) {
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<> IRB(&(*IP));
 
-    // if (functionFlag == true){
-    if (true){
-
       functionFlag = false;
 
       /* Make up cur_loc */
@@ -300,11 +303,6 @@ bool AFLCoverage::runOnModule(Module &M) {
       Value *IcntBranchPtr =
         IRB.CreateGEP(IcntPtr, IRB.CreateAnd(EdgeId, ICNTMask));
 
-      // LoadInst * tmp = IRB.CreateLoad(IcntBranchPtr);
-      // OKF("xxx %d OOO", tmp->get);
-      // OKF("xxx %d yyy", *IntegerType::get(EdgeId->getContext(), 32));
-      // OKF("xxx %d zzz\n", *IntegerType::get(ICNTMask->getContext(), 32));
-
       /* Update bitmap */
 
       LoadInst *Counter = IRB.CreateLoad(MapPtrIdx);
@@ -314,17 +312,10 @@ bool AFLCoverage::runOnModule(Module &M) {
           ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       
       /* Increment performance counter for branch */
-      LoadInst *PerfBranchCounter = IRB.CreateLoad(PerfBranchPtr);
-      PerfBranchCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      Value *PerfBranchIncr = IRB.CreateAdd(PerfBranchCounter, ConstantInt::get(Int32Ty, 1));
-      IRB.CreateStore(PerfBranchIncr, PerfBranchPtr)
-          ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      
-      /* Increment performance counter for total count  */
-      // LoadInst *PerfTotalCounter = IRB.CreateLoad(PerfPtr); // Index 0 of the perf map
-      // PerfTotalCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      // Value *PerfTotalIncr = IRB.CreateAdd(PerfTotalCounter, ConstantInt::get(Int32Ty, 1));
-      // IRB.CreateStore(PerfTotalIncr, PerfPtr)
+      // LoadInst *PerfBranchCounter = IRB.CreateLoad(PerfBranchPtr);
+      // PerfBranchCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      // Value *PerfBranchIncr = IRB.CreateAdd(PerfBranchCounter, ConstantInt::get(Int32Ty, 1));
+      // IRB.CreateStore(PerfBranchIncr, PerfBranchPtr)
       //     ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
       /* Set prev_loc to cur_loc >> 1 */
@@ -342,11 +333,12 @@ bool AFLCoverage::runOnModule(Module &M) {
       IRB.CreateStore(CurLocDesc, AFLPrevLocDesc);
 
       
-    /* Increment instruction counters  */
+      /* Increment instruction counters  */
       CountAllVisitor CAV;
       CAV.visit(BB);
       
-      Value *CNT = IRB.getInt32(CAV.Count);
+      Value *CNT = IRB.getInt32(1);
+      // Value *CNT = IRB.getInt32(CAV.Count);
       
       LoadInst *IcntLoad = IRB.CreateLoad(IcntBranchPtr);
       Value *IcntIncr = IRB.CreateAdd(IcntLoad, CNT);
@@ -354,164 +346,7 @@ bool AFLCoverage::runOnModule(Module &M) {
       IRB.CreateStore(IcntIncr, IcntBranchPtr)
           ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
-      for(BasicBlock::iterator i = BB.begin(), i2 = BB.end(); i!=i2; i++) {
-
-          IRBuilder<> MemFuzzBuilder(&(*i)); //插桩的位置
-
-          if(Instruction *inst = dyn_cast<Instruction>(i)) {
-            //return函数插桩
-            if(inst->getOpcode() == Instruction::Ret)
-            {
-
-              /* Update bitmap */
-
-              LoadInst *Counter = MemFuzzBuilder.CreateLoad(MapPtrIdx);
-              Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *Incr = MemFuzzBuilder.CreateSub(Counter, ConstantInt::get(Int8Ty, 1));
-              MemFuzzBuilder.CreateStore(Incr, MapPtrIdx)
-                  ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              
-              /* Decrement performance counter for branch */
-              LoadInst *PerfBranchCounter = MemFuzzBuilder.CreateLoad(PerfBranchPtr);
-              PerfBranchCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *PerfBranchIncr = MemFuzzBuilder.CreateSub(PerfBranchCounter, ConstantInt::get(Int32Ty, 1));
-              MemFuzzBuilder.CreateStore(PerfBranchIncr, PerfBranchPtr)
-                  ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              
-              /* Decrement performance counter for total count  */
-              LoadInst *PerfTotalCounter = MemFuzzBuilder.CreateLoad(PerfPtr); // Index 0 of the perf map
-              PerfTotalCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *PerfTotalIncr = MemFuzzBuilder.CreateSub(PerfTotalCounter, ConstantInt::get(Int32Ty, 1));
-              MemFuzzBuilder.CreateStore(PerfTotalIncr, PerfPtr)
-                  ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              
-              MemFuzzBuilder.CreateCall(instr_ReturnFunc);
-            
-            }
-          }
-        }
-
-        IRB.CreateCall(instr_CallFunc);
-
-      } else {
-
-        if (AFL_R(100) >= inst_ratio) continue;
-
-        /* Make up cur_loc */
-
-        unsigned int cur_loc = AFL_R(MAP_SIZE);
-
-        ConstantInt *CurLoc = ConstantInt::get(Int32Ty, cur_loc);
-
-        /* Load prev_loc */
-
-        LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc);
-        PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-        Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());
-
-        /* Get edge ID as XOR */
-        Value* EdgeId = IRB.CreateXor(PrevLocCasted, CurLoc);
-        
-        /* Load SHM pointer */
-
-        LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
-        MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-        Value *MapPtrIdx =
-            IRB.CreateGEP(MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
-
-        /* Update bitmap */
-
-        LoadInst *Counter = IRB.CreateLoad(MapPtrIdx);
-        Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-        Value *Incr = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
-        IRB.CreateStore(Incr, MapPtrIdx)
-            ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-
-        /* Set prev_loc to cur_loc >> 1 */
-
-        StoreInst *Store =
-            IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> 1), AFLPrevLoc);
-        Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-
-        // LoadInst *IcntPtr = IRB.CreateLoad(AFLIcntPtr);
-        // IcntPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-
-        LoadInst *IcntPtr = IRB.CreateLoad(AFLIcntPtr);
-        IcntPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-        Value *IcntBranchPtr =
-          IRB.CreateGEP(IcntPtr, IRB.CreateAnd(EdgeId, ICNTMask));
-        
-        /* Increment instruction counters  */
-        CountAllVisitor CAV;
-        CAV.visit(BB);
-        // LoadInst *IcntTotalCounter = IRB.CreateLoad(IcntPtr); // Index 1 of the Icnt map
-        // IcntTotalCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-        Value *CNT = IRB.getInt32(CAV.Count);
-        
-        Value *IcntTotalIncr = IRB.CreateAdd(IcntBranchPtr, CNT);
-
-        IRB.CreateStore(IcntTotalIncr, IcntBranchPtr)
-            ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-
-        for(BasicBlock::iterator i = BB.begin(), i2 = BB.end(); i!=i2; i++) {
-
-          IRBuilder<> MemFuzzBuilder(&(*i)); //插桩的位置
-
-          if(Instruction *inst = dyn_cast<Instruction>(i)) {
-            //return函数插桩
-            if(inst->getOpcode() == Instruction::Ret)
-            {
-
-              /* Get current source location information */
-              std::string cur_loc_desc = bb_description(BB);
-              Value* CurLocDesc = MemFuzzBuilder.CreateGlobalStringPtr(cur_loc_desc);
-
-              /* Get edge ID as XOR */
-              Value* EdgeId = MemFuzzBuilder.CreateXor(PrevLocCasted, CurLoc);
-
-              /* Load SHM pointer */
-            
-              LoadInst *PerfPtr = MemFuzzBuilder.CreateLoad(AFLPerfPtr);
-              PerfPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *PerfBranchPtr =
-                  MemFuzzBuilder.CreateGEP(PerfPtr, MemFuzzBuilder.CreateAnd(EdgeId, PerfMask));
-
-              /* Update bitmap */
-
-              LoadInst *Counter = MemFuzzBuilder.CreateLoad(MapPtrIdx);
-              Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *Incr = MemFuzzBuilder.CreateSub(Counter, ConstantInt::get(Int8Ty, 1));
-              MemFuzzBuilder.CreateStore(Incr, MapPtrIdx)
-                  ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              
-              /* Increment performance counter for branch */
-              LoadInst *PerfBranchCounter = MemFuzzBuilder.CreateLoad(PerfBranchPtr);
-              PerfBranchCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *PerfBranchIncr = MemFuzzBuilder.CreateSub(PerfBranchCounter, ConstantInt::get(Int32Ty, 1));
-              MemFuzzBuilder.CreateStore(PerfBranchIncr, PerfBranchPtr)
-                  ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              
-              /* Increment performance counter for total count  */
-              LoadInst *PerfTotalCounter = MemFuzzBuilder.CreateLoad(PerfPtr); // Index 0 of the perf map
-              PerfTotalCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-              Value *PerfTotalIncr = MemFuzzBuilder.CreateSub(PerfTotalCounter, ConstantInt::get(Int32Ty, 1));
-              MemFuzzBuilder.CreateStore(PerfTotalIncr, PerfPtr)
-                  ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-
-              /* Possibly log location */
-              LoadInst* PrevLocDesc = MemFuzzBuilder.CreateLoad(AFLPrevLocDesc);
-              MemFuzzBuilder.CreateCall(LogLocationsFunc, ArrayRef<Value*>({ PrevLocDesc, CurLocDesc }));
-
-              /* Set prev_loc_desc to cur_loc_desc */
-              MemFuzzBuilder.CreateStore(CurLocDesc, AFLPrevLocDesc);
-
-              MemFuzzBuilder.CreateCall(instr_ReturnFunc);
-
-            }
-          }
-        }
-
-      }
+      IRB.CreateCall(icnt_Increment, ArrayRef<Value*>({ CNT }));
 
       inst_blocks++;
 
