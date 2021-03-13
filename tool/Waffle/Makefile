@@ -1,5 +1,5 @@
 #
-# MemLock - makefile
+# Waffle - makefile
 # -----------------------------
 #
 # AFL is written and maintained by Michal Zalewski <lcamtuf@google.com>
@@ -7,6 +7,10 @@
 # Copyright 2013, 2014, 2015, 2016, 2017 Google Inc. All rights reserved.
 #
 # MemLock is written and maintained by wcventure <wcventure@outlook.com>
+# 
+# Copyright 2019, 2020 SZU Inc. All rights reserved.
+#
+# Waffle is written and maintained by behnamarbab <behnamarbab@gmail.com>
 # 
 # Copyright 2019, 2020 SZU Inc. All rights reserved.
 # 
@@ -28,7 +32,7 @@ MISC_PATH   = $(PREFIX)/share/afl
 
 # PROGS intentionally omit afl-as, which gets installed elsewhere.
 
-PROGS       = afl-gcc memlock-stack-fuzz memlock-heap-fuzz afl-showmap afl-tmin afl-gotcpu afl-analyze
+PROGS       = afl-gcc waffle-fuzz afl-showmap afl-tmin afl-gotcpu afl-analyze
 SH_PROGS    = afl-plot afl-cmin afl-whatsup
 
 CFLAGS     ?= -O3 -funroll-loops
@@ -46,7 +50,7 @@ ifeq "$(findstring clang, $(shell $(CC) --version 2>/dev/null))" ""
 else
   TEST_CC   = afl-clang
 endif
-# TEST_CC = memlock-stack-clang
+# TEST_CC = waffle-clang
 
 COMM_HDR    = alloc-inl.h config.h debug.h types.h
 
@@ -75,10 +79,7 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	ln -sf afl-as as
 
-memlock-stack-fuzz: memlock-stack-fuzz.c $(COMM_HDR) | test_x86
-	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
-	
-memlock-heap-fuzz: memlock-heap-fuzz.c $(COMM_HDR) | test_x86
+waffle-fuzz: waffle-fuzz.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 
 afl-showmap: afl-showmap.c $(COMM_HDR) | test_x86
@@ -136,15 +137,11 @@ install: all
 	rm -f $${DESTDIR}$(BIN_PATH)/afl-as
 	if [ -f afl-qemu-trace ]; then install -m 755 afl-qemu-trace $${DESTDIR}$(BIN_PATH); fi
 ifndef AFL_TRACE_PC
-	if [ -f memlock-stack-clang -a -f afl-llvm-pass-stack.so -a -f afl-llvm-rt-stack.o ]; then set -e; install -m 755 memlock-stack-clang $${DESTDIR}$(BIN_PATH); ln -sf memlock-stack-clang $${DESTDIR}$(BIN_PATH)/memlock-stack-clang++; install -m 755 afl-llvm-pass-stack.so afl-llvm-rt-stack.o $${DESTDIR}$(HELPER_PATH); fi
+	if [ -f waffle-clang -a -f afl-llvm-pass.so -a -f afl-llvm-rt.o ]; then set -e; install -m 755 waffle-clang $${DESTDIR}$(BIN_PATH); ln -sf waffle-clang $${DESTDIR}$(BIN_PATH)/waffle-clang++; install -m 755 afl-llvm-pass.so afl-llvm-rt.o $${DESTDIR}$(HELPER_PATH); fi
 else
-	if [ -f memlock-stack-clang -a -f afl-llvm-rt-stack.o ]; then set -e; install -m 755 memlock-stack-clang $${DESTDIR}$(BIN_PATH); ln -sf memlock-stack-clang $${DESTDIR}$(BIN_PATH)/memlock-stack-clang++; install -m 755 afl-llvm-rt-stack.o $${DESTDIR}$(HELPER_PATH); fi
+	if [ -f waffle-clang -a -f afl-llvm-rt.o ]; then set -e; install -m 755 waffle-clang $${DESTDIR}$(BIN_PATH); ln -sf waffle-clang $${DESTDIR}$(BIN_PATH)/waffle-clang++; install -m 755 afl-llvm-rt.o $${DESTDIR}$(HELPER_PATH); fi
 endif
-ifndef AFL_TRACE_PC
-	if [ -f memlock-heap-clang -a -f afl-llvm-pass-heap.so -a -f afl-llvm-rt-heap.o ]; then set -e; install -m 755 memlock-heap-clang $${DESTDIR}$(BIN_PATH); ln -sf memlock-heap-clang $${DESTDIR}$(BIN_PATH)/memlock-heap-clang++; install -m 755 afl-llvm-pass-heap.so afl-llvm-rt-heap.o $${DESTDIR}$(HELPER_PATH); fi
-else
-	if [ -f memlock-heap-clang -a -f afl-llvm-rt-heap.o ]; then set -e; install -m 755 memlock-heap-clang $${DESTDIR}$(BIN_PATH); ln -sf memlock-heap-clang $${DESTDIR}$(BIN_PATH)/memlock-heap-clangt++; install -m 755 afl-llvm-rt-heap.o $${DESTDIR}$(HELPER_PATH); fi
-endif
+
 	if [ -f afl-llvm-rt-32.o ]; then set -e; install -m 755 afl-llvm-rt-32.o $${DESTDIR}$(HELPER_PATH); fi
 	if [ -f afl-llvm-rt-64.o ]; then set -e; install -m 755 afl-llvm-rt-64.o $${DESTDIR}$(HELPER_PATH); fi
 	set -e; for i in afl-g++ afl-clang afl-clang++; do ln -sf afl-gcc $${DESTDIR}$(BIN_PATH)/$$i; done

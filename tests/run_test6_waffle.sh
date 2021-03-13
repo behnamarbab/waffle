@@ -13,21 +13,14 @@ else
     ROOT_DIR=$(dirname $(dirname $BIN_PATH))
 fi
 
-echo "Make Clean Install!"
-
-AFL_PATH=${ROOT_DIR}/tool/MemLock
-CLANG_PRE="memlock-stack-"
+AFL_PATH=${ROOT_DIR}/tool/Waffle
+CLANG_PRE="waffle-"
 FUZZ_NAME="wfl"
-
-echo $1
 
 if [ "$1" = "afl" ]; then
     AFL_PATH=${ROOT_DIR}/afl
     CLANG_PRE="afl-"
     FUZZ_NAME="afl"
-elif [ "$1" = "mem" ]; then
-    AFL_PATH=${ROOT_DIR}/memlock/tool/MemLock
-    FUZZ_NAME="mem"
 fi
 
 TEST_DIR=${ROOT_DIR}/tests/test6
@@ -44,15 +37,9 @@ fi
 
 TMP_TEST_DIR=/tmp/fuzz_test/test6
 
-echo "----------------"
-echo "Making Waffle..."
-echo "----------------"
 make -C ${AFL_PATH} clean
 make -C ${AFL_PATH}
 
-echo "--------------"
-echo "Making LLVM..."
-echo "--------------"
 make -C ${AFL_PATH}/llvm_mode clean
 make -C ${AFL_PATH}/llvm_mode
 
