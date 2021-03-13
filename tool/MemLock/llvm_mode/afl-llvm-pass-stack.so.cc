@@ -212,6 +212,12 @@ bool AFLCoverage::runOnModule(Module &M) {
   llvm::Function *icnt_Increment =
       llvm::Function::Create(icntIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
 
+  std::vector<Type *> icnt_args(1, Type::getInt32Ty(context));
+  llvm::FunctionType *icntIncrement =
+      llvm::FunctionType::get(builder.getVoidTy(), icnt_args, false);
+  llvm::Function *icnt_Increment =
+      llvm::Function::Create(icntIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
+
   GlobalVariable *AFLMapPtr =
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_area_ptr");

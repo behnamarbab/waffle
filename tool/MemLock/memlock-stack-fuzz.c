@@ -1439,50 +1439,6 @@ u8 check_max(u32 cur_icnt){
   }
 }
 
-static void update_bitmap_score_classic(struct queue_entry* q) {
-
-  u32 i;
-  u64 fav_factor = q->exec_us * q->len;
-
-  /* For every byte set in trace_bits[], see if there is a previous winner,
-     and how it compares to us. */
-
-  for (i = 0; i < MAP_SIZE; i++)
-
-    if (trace_bits[i]) {
-
-       if (top_rated[i]) {
-
-         /* Faster-executing or smaller test cases are favored. */
-
-         if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
-
-         /* Looks like we're going to win. Decrease ref count for the
-            previous winner, discard its trace_bits[] if necessary. */
-
-         if (!--top_rated[i]->tc_ref) {
-           ck_free(top_rated[i]->trace_mini);
-           top_rated[i]->trace_mini = 0;
-         }
-
-       }
-
-       /* Insert ourselves as the new winner. */
-
-       top_rated[i] = q;
-       q->tc_ref++;
-
-       if (!q->trace_mini) {
-         q->trace_mini = ck_alloc(MAP_SIZE >> 3);
-         minimize_bits(q->trace_mini, trace_bits);
-       }
-
-       score_changed = 1;
-
-     }
-}
-
-
 static void update_bitmap_score(struct queue_entry* q) {
 
   u32 i;
