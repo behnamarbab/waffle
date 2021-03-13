@@ -86,10 +86,6 @@
 #  define EXP_ST static
 #endif /* ^AFL_LIB */
 
-/* Staleness adjustment. when an input hits a branch with maximum staleness,
-   skip it with probability STALENESS_CONST/100 */
-#define STALENESS_CONST 80
-
 /* Lots of globals, but mostly for the status UI and other things where it
    really makes no sense to haul them around as function parameters. */
 
@@ -137,8 +133,6 @@ EXP_ST u8  skip_deterministic,        /* Skip deterministic stages?       */
            run_over10m,               /* Run time over 10 minutes?        */
            persistent_mode,           /* Running in persistent mode?      */
            method_stage,              /* Fuzz for maximum counts          */
-           prioritize_less_stale,     /* prioritize by staleness          */
-           complex_stale,             /* use a fancy staleness formula    */
            zero_other_counts,         /* zero out all perf counts but 1st */
            deferred_mode,             /* Deferred forkserver mode?        */
            fast_cal;                  /* Try to calibrate faster?         */
@@ -156,7 +150,6 @@ static s32 forksrv_pid,               /* PID of the fork server           */
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
 EXP_ST u32* perf_bits;                /* PERF - SHM with 2nd (perf) map   */
-EXP_ST u32 staleness[PERF_SIZE];      /* PERF - the staleness max values  */
 
 EXP_ST u32* icnt_bits;                /* ICNT - SHM with 3rd variable     */
 EXP_ST u32 max_icnts[ICNT_SIZE];      /* ICNT - keeps track of max value  */
@@ -267,7 +260,6 @@ struct queue_entry {
 
   u32 bitmap_size,                    /* Number of bits set in bitmap     */
       exec_cksum,                     /* Checksum of the execution trace  */
-      perf_cksum,                     /* PERF - cksum of unbukceted trace */
       icnt_cksum;
 
   u64 exec_us,                        /* Execution time (us)              */
@@ -302,7 +294,6 @@ static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
                           *q_prev100; /* Previous 100 marker              */
 
 static struct queue_entry **top_rated,/* Top entries for bitmap bytes     */
-              **top_rated_perf,       /* Top entries for perf bytes       */
               **top_rated_icnt;       /* Top entries for icnt bytes       */
 
 // static struct queue_entry*
@@ -1432,7 +1423,7 @@ u8 check_stage(u8 stage) {
   return stage & method_stage;
 }
 
-u8 check_max(u32 cur_icnt){
+void check_max(u32 cur_icnt){
   if(max_total_icnt < cur_icnt) {
     max_total_icnt = cur_icnt;
     // last_method = method_stage_name;
@@ -2893,7 +2884,6 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
         q->exec_cksum = cksum;
         /* setup the perf cksum here. Assume it is not variable, or that 
           variability will be detected in the regular checking */ 
-        q->perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST); 
         q->icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST); 
 
         memcpy(first_trace, trace_bits, MAP_SIZE);
@@ -3471,7 +3461,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   }
 
   queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);    
-  queue_top->perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST); 
   queue_top->icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST); 
 
   /* Try to calibrate inline; this also calls update_bitmap_score() when
@@ -4536,7 +4525,7 @@ static void show_stats(void) {
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d - %s", max_total_icnt, last_method);
+  sprintf(tmp, "%lld - %s", max_total_icnt, last_method);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -4878,7 +4867,6 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
       u32 trim_avail = MIN(remove_len, q->len - remove_pos);
       u32 exec_cksum;
-      u32 perf_cksum;
       u32 icnt_cksum;
 
       write_with_gap(in_buf, q->len, remove_pos, trim_avail);
@@ -4893,7 +4881,6 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
 
       /* Note that we don't keep track of crashes or hangs here; maybe TODO? */
-      perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST);
       icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST);
       exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
@@ -5706,7 +5693,6 @@ static u8 fuzz_one(char** argv) {
     if (!eff_map[EFF_APOS(stage_cur)]) {
 
       u32 exec_cksum;
-      u32 perf_cksum;
       u32 icnt_cksum;
 
       /* If in dumb mode or if the file is very short, just flag everything
@@ -5714,11 +5700,9 @@ static u8 fuzz_one(char** argv) {
 
       if (!dumb_mode && len >= EFF_MIN_LEN){
         exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-        perf_cksum = hash32(perf_bits, PERF_SIZE*sizeof(u32), HASH_CONST);
         icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST);
       } else {
         exec_cksum = ~queue_cur->exec_cksum;
-        perf_cksum = ~queue_cur->perf_cksum;
         icnt_cksum = ~queue_cur->icnt_cksum;
       }
 
@@ -7478,7 +7462,6 @@ static void usage(u8* argv0) {
        "  -d            - quick & dirty mode (skips deterministic steps)\n"
        "  -n            - fuzz without instrumentation (dumb mode)\n"
        "  -x dir        - optional fuzzer dictionary (see README)\n"
-       "  -s            - prioritize inputs with lower staleness (requires p)\n"
        "  -N size       - max input size to be generated, in bytes\n\n"
 
        "Other stuff:\n\n"
@@ -8142,7 +8125,7 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+zspN:chi:o:f:m:t:T:dnCB:S:M:x:Qa:")) > 0)
+  while ((opt = getopt(argc, argv, "+zpN:hi:o:f:m:t:T:dnCB:S:M:x:Qa:")) > 0)
 
     switch (opt) {
 
@@ -8150,16 +8133,6 @@ int main(int argc, char** argv) {
         if (sscanf(optarg, "%hhu", &method_stage) < 1 ||
               optarg[0] == '-') FATAL("Bad syntax used for -t");
         break;
-      
-      case 's':
-        SAYF("Prioritizing less stale inputs...\n");
-        prioritize_less_stale = 1;
-        break;
-
-      case 'c':
-        SAYF("Complex staleness...\n");
-        complex_stale = 1;
-        break; 
 
      case 'N':
         if (sscanf(optarg, "%llu", &max_file_len) != 1) FATAL("-N argument should be a positive integer");
