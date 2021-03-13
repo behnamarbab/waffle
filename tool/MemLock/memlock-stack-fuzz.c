@@ -2803,7 +2803,6 @@ static void show_stats(void);
 
 static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
                          u32 handicap, u8 from_queue) {
-  // TODO in calibration look at the entire trace bits... booo
 
   static u8 first_trace[MAP_SIZE];
 
