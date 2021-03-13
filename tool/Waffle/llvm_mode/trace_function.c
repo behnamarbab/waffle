@@ -13,14 +13,9 @@
 
 struct sys_data
 {
-	unsigned long long int MaxContinueCMNum;
-	unsigned long long int MaxCallNum;
   unsigned long long int MaxInstCount;
 };
 
-static unsigned long long int MaxCallNum = 0;
-static unsigned long long int ContinueCallNum = 1000000; //防溢出
-static unsigned long long int MaxContinueCMNum = 0;
 static unsigned long long int MaxInstCount = 0;
 
 void __attribute__((constructor)) traceBegin(void) {

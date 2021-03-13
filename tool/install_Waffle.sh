@@ -32,9 +32,10 @@ cd ${ROOT_DIR}/tool/Waffle
 make clean
 make
 cd ${ROOT_DIR}/tool/Waffle/llvm_mode
+make clean
 make
-cd ${ROOT_DIR}/tool/Waffle
-make install
+# cd ${ROOT_DIR}/tool/Waffle
+# make install
 
 # cd ${ROOT_DIR}/tool/AFL-2.52b
 # make clean

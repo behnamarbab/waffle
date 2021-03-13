@@ -276,11 +276,6 @@ struct queue_entry {
 
 };
 
-static u64 stackScore_cur = 0;         /* Added: cur sizeScore (wcventure)*/
-static u64 MaxCallNum = 0;            /* Added: from file     (wcventure) */
-static u64 MaxContinueCMNum = 0;      /* Added: from file     (wcventure) */
-static u64 stackScore_max = 0;         /* Added: from file     (wcventure)*/
-
 EXP_ST u64 max_total_icnt = 0;
 EXP_ST u64 total_icnt_cur = 0;
 EXP_ST u8* last_method;
@@ -375,16 +370,12 @@ static inline u32 UR(u32 limit);
 
 struct sys_data
 {
-  unsigned long long int MaxContinueCMNum;
-  unsigned long long int MaxCallNum;
   unsigned long long int MaxInstCount;
 };
 
 struct sys_data* mem_data;                /* SHM (wcventure)  */
 
-void ReadMemStatus(u64 *a, u64 *b){
-  *a = mem_data->MaxContinueCMNum;
-  *b = mem_data->MaxCallNum;
+void ReadMemStatus(){
   total_icnt_cur = mem_data->MaxInstCount;
   if(total_icnt_cur > max_total_icnt) {
     max_total_icnt = total_icnt_cur;
@@ -901,7 +892,6 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
-  q->stackScore   = stackScore_cur;
   q->total_icnt   = total_icnt_cur;
 
   if (q->depth > max_depth) max_depth = q->depth;
@@ -2842,11 +2832,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
     
-    ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-
-    stackScore_cur = MaxCallNum;
-    if (stackScore_cur > stackScore_max)
-      stackScore_max = stackScore_cur;
+    ReadMemStatus();
 
     if (stop_soon || fault != crash_mode) goto abort_calibration;
 
@@ -2908,7 +2894,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->cal_failed  = 0;
 
   /* start: CountScore (wcventure) */
-  q -> stackScore = stackScore_cur;
+
   q -> total_icnt = total_icnt_cur;
   /* end: CountScore */
 
@@ -3525,10 +3511,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         u8 new_fault;
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
-        ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-        stackScore_cur = MaxCallNum; // icnt here
-        if (stackScore_cur > stackScore_max)
-          stackScore_max = stackScore_cur;
+        ReadMemStatus();
 
         /* A corner case that one user reported bumping into: increasing the
            timeout actually uncovers a crash. Make sure we don't discard it if
@@ -4873,10 +4856,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
       fault = run_target(argv, exec_tmout);
       trim_execs++;
-      ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-      stackScore_cur = MaxCallNum;
-      if (stackScore_cur  > stackScore_max)
-        stackScore_max = stackScore_cur;
+      ReadMemStatus();
 
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
 
@@ -4976,10 +4956,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
 
   fault = run_target(argv, exec_tmout);
-  ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-  stackScore_cur = MaxCallNum;
-  if (stackScore_cur > stackScore_max)
-    stackScore_max = stackScore_cur;
+  ReadMemStatus();
 
   if (stop_soon) return 1;
 
@@ -7124,10 +7101,7 @@ static void sync_fuzzers(char** argv) {
         write_to_testcase(mem, st.st_size);
 
         fault = run_target(argv, exec_tmout);
-        ReadMemStatus(&MaxContinueCMNum, &MaxCallNum);
-        stackScore_cur = MaxCallNum;
-        if (stackScore_cur > stackScore_max)
-          stackScore_max = stackScore_cur;
+        ReadMemStatus();
 
         if (stop_soon) return;
 
