@@ -60,11 +60,5 @@ int main(int argc, char **argv) {
 
     cout << "Total swapss: " << total_swaps << endl;
 
-    if(total_swaps>10000) {
-        throw 99;
-    }
-    
-    
-
     return 0;
 }

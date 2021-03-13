@@ -206,18 +206,6 @@ bool AFLCoverage::runOnModule(Module &M) {
   llvm::LLVMContext& context = M.getContext ();
   llvm::IRBuilder<> builder(context); 
 
-  // Function instr_Call()
-  llvm::FunctionType *funcCallType = 
-      llvm::FunctionType::get(builder.getVoidTy(), false);
-  llvm::Function *instr_CallFunc = 
-      llvm::Function::Create(funcCallType, llvm::Function::ExternalLinkage, "instr_Call", &M);
-
-  // Function instr_Return()
-  llvm::FunctionType *funcReturnType = 
-      llvm::FunctionType::get(builder.getVoidTy(), false);
-  llvm::Function *instr_ReturnFunc = 
-      llvm::Function::Create(funcReturnType, llvm::Function::ExternalLinkage, "instr_Return", &M);
-
   std::vector<Type *> icnt_args(1, Type::getInt32Ty(context));
   llvm::FunctionType *icntIncrement =
       llvm::FunctionType::get(builder.getVoidTy(), icnt_args, false);
@@ -227,10 +215,6 @@ bool AFLCoverage::runOnModule(Module &M) {
   GlobalVariable *AFLMapPtr =
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_area_ptr");
- 
-  GlobalVariable *AFLPerfPtr =
-      new GlobalVariable(M, PointerType::get(Int32Ty, 0), false,
-                         GlobalValue::ExternalLinkage, 0, "__afl_perf_ptr");
 
   GlobalVariable *AFLIcntPtr =
       new GlobalVariable(M, PointerType::get(Int32Ty, 0), false,
@@ -244,7 +228,6 @@ bool AFLCoverage::runOnModule(Module &M) {
       M, CharPtrTy, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc_desc",
       0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
-  ConstantInt* PerfMask = ConstantInt::get(Int32Ty, PERF_SIZE-1);
   ConstantInt* ICNTMask = ConstantInt::get(Int32Ty, ICNT_SIZE-1);
 
   Function* LogLocationsFunc = Function::Create(FunctionType::get(VoidTy, 
@@ -293,13 +276,8 @@ bool AFLCoverage::runOnModule(Module &M) {
       Value *MapPtrIdx =
           IRB.CreateGEP(MapPtr, EdgeId);
 
-      LoadInst *PerfPtr = IRB.CreateLoad(AFLPerfPtr);
-      PerfPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      Value *PerfBranchPtr =
-        IRB.CreateGEP(PerfPtr, IRB.CreateAnd(EdgeId, PerfMask));
-
       LoadInst *IcntPtr = IRB.CreateLoad(AFLIcntPtr);
-      PerfPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      IcntPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *IcntBranchPtr =
         IRB.CreateGEP(IcntPtr, IRB.CreateAnd(EdgeId, ICNTMask));
 
@@ -310,13 +288,6 @@ bool AFLCoverage::runOnModule(Module &M) {
       Value *Incr = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
       IRB.CreateStore(Incr, MapPtrIdx)
           ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      
-      /* Increment performance counter for branch */
-      // LoadInst *PerfBranchCounter = IRB.CreateLoad(PerfBranchPtr);
-      // PerfBranchCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      // Value *PerfBranchIncr = IRB.CreateAdd(PerfBranchCounter, ConstantInt::get(Int32Ty, 1));
-      // IRB.CreateStore(PerfBranchIncr, PerfBranchPtr)
-      //     ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
       /* Set prev_loc to cur_loc >> 1 */
 
