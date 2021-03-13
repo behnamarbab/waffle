@@ -47,11 +47,13 @@ TMP_TEST_DIR=/tmp/fuzz_test/test6
 echo "----------------"
 echo "Making Waffle..."
 echo "----------------"
+make -C ${AFL_PATH} clean
 make -C ${AFL_PATH}
 
 echo "--------------"
 echo "Making LLVM..."
 echo "--------------"
+make -C ${AFL_PATH}/llvm_mode clean
 make -C ${AFL_PATH}/llvm_mode
 
 cd ${TMP_TEST_DIR}
@@ -85,8 +87,14 @@ if [ "$2" = "m" ]; then
     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@
 else
     "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
-    ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@
+    ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -- ${EXEC_PATH} @@
 fi
+
+# else
+#     "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
+#     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@
+# fi
+
 
 
 # export ASAN_OPTIONS=detect_odr_violation=0:allocator_may_return_null=1:abort_on_error=1:symbolize=0:detect_leaks=0
