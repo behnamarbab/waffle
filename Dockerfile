@@ -1,4 +1,4 @@
-FROM ubuntu:16.04
+FROM ubuntu:xenial
 
 # RUN cp /etc/apt/sources.list /etc/apt/sources.list.bak
 # RUN sed -i s:/archive.ubuntu.com:/mirrors.tuna.tsinghua.edu.cn/ubuntu:g /etc/apt/sources.list
@@ -16,12 +16,11 @@ RUN apt-add-repository "deb http://apt.llvm.org/xenial/ llvm-toolchain-xenial-6.
 RUN apt-get update
 RUN apt-get install -y clang llvm
 
-COPY . /Waffle
-WORKDIR /Waffle
-
+COPY . /source_file
+WORKDIR /source_file
 
 # ENV PATH "/workdir/MemLock/clang+llvm/bin:$PATH"
 # ENV LD_LIBRARY_PATH "/workdir/MemLock/clang+llvm/lib:$LD_LIBRARY_PATH"
 
 # RUN tool/install_llvm.sh
-RUN tool/install_Waffle.sh
+RUN cd waffle && CC=clang make && cd llvm_mode && make && echo $(clang -v)
