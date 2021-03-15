@@ -23,4 +23,4 @@ WORKDIR /source_file
 # ENV LD_LIBRARY_PATH "/workdir/MemLock/clang+llvm/lib:$LD_LIBRARY_PATH"
 
 # RUN tool/install_llvm.sh
-RUN cd waffle && CC=clang make && cd llvm_mode && make && echo $(clang -v)
+RUN cd waffle && CC=clang make && cd llvm_mode && make
