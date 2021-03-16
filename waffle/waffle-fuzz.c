@@ -1078,36 +1078,17 @@ static inline u8 has_new_bits(u8* virgin_map) {
 /* whether the trace_bits attain some new maximum value for 
    some i. updates max_counts with max counts.
    */
-static inline u8 has_new_max(u8 t) {
+static inline u8 has_new_max() {
   int ret = 0;
   u32 *pbits;
   u32 *mx_count;
   u32 sz;
 
-  // if(t & METH_MEM) {
-  //   pbits = icnt_bits;
-  //   mx_count = max_icnts;
-  //   sz = ICNT_SIZE;
-  // }
-  // else 
-  if(t == METH_WFL) {
-    pbits = icnt_bits;
-    mx_count = max_icnts;
-    sz = ICNT_SIZE;
-  }
-  else {
-    return 0;
-  }
-
-  for (int i = 0; i < sz; i++) {
-    if(pbits[i]) {
-      // DEBUG("pbits: %d\n", pbits[i]);
-    }
-    if (unlikely(pbits[i]) && unlikely(pbits[i] > MAX_CNT_MULT*mx_count[i])) {
+  for (int i = 0; i < ICNT_SIZE; i++) {
+    if (unlikely(icnt_bits[i]) && unlikely(icnt_bits[i] > MAX_CNT_MULT*max_icnts[i])) {
       if(likely(ret<2)) {
         ret = 2;
-        // DEBUG("Method: %u New max(0x%04x) = %u (earlier was: %u)\n ", t, i, pbits[i], mx_count[i]);
-        mx_count[i] = pbits[i];
+        max_icnts[i] = icnt_bits[i];
       }
       else {
         ret = 1;
@@ -3012,7 +2993,7 @@ static void perform_dry_run(char** argv) {
           check_map_coverage();
 
           // Populates the max_counts properly.
-          has_new_max(METH_WFL);
+          has_new_max();
         }
 
         if (crash_mode) FATAL("Test case '%s' does *NOT* crash", fn);
@@ -3398,7 +3379,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
   u8  *fn = "";
   u8  hnb = 0;
-  u8  hnm_perf = 0;
   u8  hnm_icnt = 0;
   s32 fd;
   u8  keeping = 0, res;
@@ -3412,10 +3392,9 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
     hnb = has_new_bits(virgin_bits);
     // are there some subtleties here of when the max should be set? TODO
-    hnm_icnt = has_new_max(METH_WFL);
+    hnm_icnt = has_new_max();
 
-    // if (!hnb && !hnm_perf && !hnm_icnt) { //(wcventure)
-    if (!hnb && !hnm_icnt) { //(wcventure)
+    if (!hnb && !hnm_icnt) {
       if (crash_mode) total_crashes++;
       return 0;
     }    
@@ -3423,8 +3402,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #ifndef SIMPLE_FILES
 
-    fn = alloc_printf("%s/queue/id:%06u,%s%s%s", out_dir, queued_paths,
-                      describe_op(hnb), hnm_perf ? ",+max" : "", hnm_icnt ? ",+icnt": "");
+    fn = alloc_printf("%s/queue/id:%06u,%s%s", out_dir, queued_paths,
+                      describe_op(hnb), hnm_icnt ? ",+icnt": "");
 
 #else
 
@@ -3441,7 +3420,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 		add_to_queue(fn, len, 0);
 	}
   // ! maybe has_new_cov could be different for each stage
-  if (hnm_icnt && 2) {
+  if (hnm_icnt & 2) {
     queue_top->has_new_cov = 1;
     queued_with_cov++;
   }
