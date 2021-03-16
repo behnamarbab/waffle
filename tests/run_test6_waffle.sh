@@ -13,21 +13,14 @@ else
     ROOT_DIR=$(dirname $(dirname $BIN_PATH))
 fi
 
-echo "Make Clean Install!"
-
-AFL_PATH=${ROOT_DIR}/tool/MemLock
-CLANG_PRE="memlock-stack-"
+AFL_PATH=${ROOT_DIR}/tool/Waffle
+CLANG_PRE="waffle-"
 FUZZ_NAME="wfl"
-
-echo $1
 
 if [ "$1" = "afl" ]; then
     AFL_PATH=${ROOT_DIR}/afl
     CLANG_PRE="afl-"
     FUZZ_NAME="afl"
-elif [ "$1" = "mem" ]; then
-    AFL_PATH=${ROOT_DIR}/memlock/tool/MemLock
-    FUZZ_NAME="mem"
 fi
 
 TEST_DIR=${ROOT_DIR}/tests/test6
@@ -44,14 +37,10 @@ fi
 
 TMP_TEST_DIR=/tmp/fuzz_test/test6
 
-echo "----------------"
-echo "Making Waffle..."
-echo "----------------"
+make -C ${AFL_PATH} clean
 make -C ${AFL_PATH}
 
-echo "--------------"
-echo "Making LLVM..."
-echo "--------------"
+make -C ${AFL_PATH}/llvm_mode clean
 make -C ${AFL_PATH}/llvm_mode
 
 cd ${TMP_TEST_DIR}
@@ -85,8 +74,14 @@ if [ "$2" = "m" ]; then
     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@
 else
     "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
-    ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@
+    ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -- ${EXEC_PATH} @@
 fi
+
+# else
+#     "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
+#     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@
+# fi
+
 
 
 # export ASAN_OPTIONS=detect_odr_violation=0:allocator_may_return_null=1:abort_on_error=1:symbolize=0:detect_leaks=0
