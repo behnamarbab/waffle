@@ -33,6 +33,8 @@
 #include <unistd.h>
 #include <string.h>
 
+#include <math.h>
+
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/IRBuilder.h"
@@ -50,18 +52,14 @@ using namespace llvm;
 
 namespace {
 
-  class AFLCoverage : public ModulePass {
+  class WAFLCoverage : public ModulePass {
 
     public:
 
       static char ID;
-      AFLCoverage() : ModulePass(ID) { }
+      WAFLCoverage() : ModulePass(ID) { }
 
       bool runOnModule(Module &M) override;
-
-      // StringRef getPassName() const override {
-      //  return "American Fuzzy Lop Instrumentation";
-      // }
 
   };
 
@@ -79,17 +77,17 @@ static inline std::string bb_description(const BasicBlock& bb) {
 }
 
 struct CountAllVisitor : public InstVisitor<CountAllVisitor> {
-  unsigned Count;
-  CountAllVisitor() : Count(0) {}
+  int Count;
+  CountAllVisitor() : Count(1) {}
 
-  // void visitICmpInst(ICmpInst &I) { ++Count; }
+  void visitICmpInst(ICmpInst &I) { ++Count; }
   // void visitFCmpInst(FCmpInst &I)                { ++Count;}
   // void visitAllocaInst(AllocaInst &I)            { ++Count;}
   // void visitLoadInst(LoadInst     &I)            { ++Count;}
-  void visitStoreInst(StoreInst   &I)            { 
-    ++Count;
-    // OKF("Storing %u", Count);
-  }
+  // void visitStoreInst(StoreInst   &I)            { 
+  //   ++Count;
+  //   // OKF("Storing %u", Count);
+  // }
   // void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) { ++Count;}
   // void visitAtomicRMWInst(AtomicRMWInst &I)      { ++Count;}
   // void visitFenceInst(FenceInst   &I)            { ++Count;}
@@ -120,10 +118,10 @@ struct CountAllVisitor : public InstVisitor<CountAllVisitor> {
   // void visitCleanupPadInst(CleanupPadInst &I) { ++Count;}
   // void visitCatchPadInst(CatchPadInst &I)     { ++Count;}
   // // void visitFreezeInst(FreezeInst &I)         { ++Count;}
-  void visitInstruction(Instruction &I) {
-    ++Count;
-    // OKF("Visiting %u", Count);
-  }
+  // void visitInstruction(Instruction &I) {
+  //   ++Count;
+  //   // OKF("Visiting %u", Count);
+  // }
 
   // void visitDbgDeclareInst(DbgDeclareInst &I)    { ++Count;}
   // void visitDbgValueInst(DbgValueInst &I)        { ++Count;}
@@ -164,10 +162,10 @@ struct CountAllVisitor : public InstVisitor<CountAllVisitor> {
 };
 
 
-char AFLCoverage::ID = 0;
+char WAFLCoverage::ID = 0;
 
 
-bool AFLCoverage::runOnModule(Module &M) {
+bool WAFLCoverage::runOnModule(Module &M) {
 
   LLVMContext &C = M.getContext();
 
@@ -238,17 +236,14 @@ bool AFLCoverage::runOnModule(Module &M) {
   /* Instrument all the things! */
 
   int inst_blocks = 0;
+  int total_lg_icnts = 0;
 
   for (auto &F : M) {
-
-    bool functionFlag = true;//第一次进函数时flag为true，插桩后改为false
 
     for (auto &BB : F) {
 
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<> IRB(&(*IP));
-
-      functionFlag = false;
 
       /* Make up cur_loc */
 
@@ -307,9 +302,13 @@ bool AFLCoverage::runOnModule(Module &M) {
       /* Increment instruction counters  */
       CountAllVisitor CAV;
       CAV.visit(BB);
+
+      i32  log_count = (i32) log2(CAV.Count);
+      if(log_count<0)
+        log_count = 0;
       
-      Value *CNT = IRB.getInt32(1);
-      // Value *CNT = IRB.getInt32(CAV.Count);
+      // Value *CNT = IRB.getInt32(1);
+      Value *CNT = IRB.getInt32(log_count);// IRB.CreateCall(icnt_Increment, ArrayRef<Value*>({ CNT }));
       
       LoadInst *IcntLoad = IRB.CreateLoad(IcntBranchPtr);
       Value *IcntIncr = IRB.CreateAdd(IcntLoad, CNT);
@@ -320,6 +319,8 @@ bool AFLCoverage::runOnModule(Module &M) {
       IRB.CreateCall(icnt_Increment, ArrayRef<Value*>({ CNT }));
 
       inst_blocks++;
+      // OKF("- %d -", log_count);
+      total_lg_icnts += log_count;
 
     }
 
@@ -330,10 +331,10 @@ bool AFLCoverage::runOnModule(Module &M) {
   if (!be_quiet) {
 
     if (!inst_blocks) WARNF("No instrumentation targets found.");
-    else OKF("x      Instrumented %u locations (%s mode, ratio %u%%).",
+    else OKF("Instrumented %u locations (%s mode, ratio %u%%).\n    Total: %d",
              inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
              ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
-              "ASAN/MSAN" : "non-hardened"), inst_ratio);
+              "ASAN/MSAN" : "non-hardened"), inst_ratio, total_lg_icnts);
 
   }
 
@@ -342,16 +343,16 @@ bool AFLCoverage::runOnModule(Module &M) {
 }
 
 
-static void registerAFLPass(const PassManagerBuilder &,
+static void registerWAFLPass(const PassManagerBuilder &,
                             legacy::PassManagerBase &PM) {
 
-  PM.add(new AFLCoverage());
+  PM.add(new WAFLCoverage());
 
 }
 
 
 static RegisterStandardPasses RegisterAFLPass(
-    PassManagerBuilder::EP_ModuleOptimizerEarly, registerAFLPass);
+    PassManagerBuilder::EP_ModuleOptimizerEarly, registerWAFLPass);
 
 static RegisterStandardPasses RegisterAFLPass0(
-    PassManagerBuilder::EP_EnabledOnOptLevel0, registerAFLPass);
+    PassManagerBuilder::EP_EnabledOnOptLevel0, registerWAFLPass);

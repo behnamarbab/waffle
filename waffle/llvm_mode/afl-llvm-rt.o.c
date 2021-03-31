@@ -53,8 +53,8 @@ u8  __afl_area_initial[MAP_SIZE];
 u8* __afl_area_ptr = __afl_area_initial;
 
 /* Similarly we have a map for instruction counters */
-u32  __afl_icnt_initial[ICNT_SIZE];
-u32* __afl_icnt_ptr = __afl_icnt_initial;
+i32  __afl_icnt_initial[ICNT_SIZE];
+i32* __afl_icnt_ptr = __afl_icnt_initial;
 
 /* These are saved previous location IDs and strings */
 __thread u32 __afl_prev_loc;
@@ -204,7 +204,7 @@ int __afl_persistent_loop(unsigned int max_cnt) {
     if (is_persistent) {
 
       memset(__afl_area_ptr, 0, MAP_SIZE);
-      memset(__afl_icnt_ptr, 0, ICNT_SIZE * sizeof(u32));
+      memset(__afl_icnt_ptr, 0, ICNT_SIZE * sizeof(i32));
       __afl_area_ptr[0] = 1;
       __afl_prev_loc = 0;
     }

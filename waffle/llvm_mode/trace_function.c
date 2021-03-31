@@ -13,10 +13,10 @@
 
 struct sys_data
 {
-  unsigned long long int MaxInstCount;
+  int MaxInstCount;
 };
 
-static unsigned long long int MaxInstCount = 0;
+static int MaxInstCount = 0;
 
 void __attribute__((constructor)) traceBegin(void) {
   ;
@@ -46,5 +46,5 @@ void __attribute__((destructor)) traceEnd(void) {
 }
 
 void instr_AddInsts(int cnt) {
-  MaxInstCount += (unsigned long long)cnt;
+  MaxInstCount += cnt;
 }

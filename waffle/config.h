@@ -317,17 +317,11 @@
 #define MAP_SIZE_POW2       16
 #define MAP_SIZE            (1 << MAP_SIZE_POW2)
 
-
-/* Map size of the performance bits. These are fine-grained performance
- * profiles (e.g. branch counts or malloc counts).
- */
-#define PERF_SIZE_POW2      13
-#define PERF_SIZE           (1 << PERF_SIZE_POW2)
-
 // Size of the array of counters for each type of instruction
 
-#define ICNT_SIZE_POW2      13
-#define ICNT_SIZE           (1 << ICNT_SIZE_POW2)
+#define ICNT_SIZE_POW2      16
+#define ICNT_SIZE           MAP_SIZE
+// #define ICNT_SIZE           (1 << ICNT_SIZE_POW2)
 
 #define MAX_CNT_MULT        1.05
 #define MAX_FAV_MULT        1.10

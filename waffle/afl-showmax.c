@@ -143,7 +143,7 @@ static void setup_shm(void) {
 
   u8* shm_str;
 
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + PERF_SIZE*sizeof(u32) + ICNT_SIZE*sizeof(u32), IPC_CREAT | IPC_EXCL | 0600);
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE +  ICNT_SIZE*sizeof(i32), IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
 
@@ -716,30 +716,6 @@ int main(int argc, char** argv) {
   run_target(use_argv);
 
   u32 * perf_bits = (u32 *) (trace_bits + MAP_SIZE);
-
-  if (show_all ){
-    for (int i = 1; i < PERF_SIZE; i++){
-      if (perf_bits[i]) printf("%d %u\n",i, perf_bits[i]);
-    }
-  } 
-  else if (show_non_total_max) {
-    u32 max = 0;
-    for (int i = 1; i < PERF_SIZE; i++){
-      if (perf_bits[i] > max)
-        max = perf_bits[i];
-    }
-    printf("%u\n", max);
-  } 
-  else {
-    printf("%u\n", perf_bits[0]);
-    u64 sum = 0;
-    for (int i = 1; i < PERF_SIZE; i++){
-    //if (perf_bits[i]) printf("%u\n",perf_bits[i]);
-      sum += perf_bits[i];}
-      if (sum != perf_bits[0]) {
-      OKF("Not equal: %u != %llu" cRST, perf_bits[0], sum);
-    }
-  }
 
 
   if (!quiet_mode) {
