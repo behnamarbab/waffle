@@ -13,12 +13,12 @@ else
     ROOT_DIR=$(dirname $(dirname $BIN_PATH))
 fi
 
-AFL_PATH=${ROOT_DIR}/tool/Waffle
+AFL_PATH=${ROOT_DIR}/waffle
 CLANG_PRE="waffle-"
 FUZZ_NAME="wfl"
 
 if [ "$1" = "afl" ]; then
-    AFL_PATH=${ROOT_DIR}/afl
+    AFL_PATH=${ROOT_DIR}/waffle
     CLANG_PRE="afl-"
     FUZZ_NAME="afl"
 fi
@@ -69,18 +69,16 @@ OUTPUT_DIR=${TMP_TEST_DIR}/out_$i
 FUZZ_COMMAND=${AFL_PATH}/${CLANG_PRE}fuzz
 EXEC_PATH=${TMP_TEST_DIR}/example6${FUZZ_NAME}
 
-if [ "$2" = "m" ]; then 
-    "----- ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@"
-    ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@
-else
-    "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
-    ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -- ${EXEC_PATH} @@
-fi
-
+# if [ "$2" = "m" ]; then 
+#     "----- ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@"
+#     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -M Master-${FUZZ_NAME} -- ${EXEC_PATH} @@
 # else
 #     "===== ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@"
-#     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -S ${FUZZ_NAME} -- ${EXEC_PATH} @@
+#     ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -- ${EXEC_PATH} @@
 # fi
+
+"= ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -- ${EXEC_PATH} @@"
+   ${FUZZ_COMMAND} -i ${INPUT_DIR} -o ${OUTPUT_DIR} -m none -t 5000 -- ${EXEC_PATH} @@
 
 
 

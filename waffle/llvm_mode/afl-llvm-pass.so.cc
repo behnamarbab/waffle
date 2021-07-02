@@ -80,7 +80,7 @@ struct CountAllVisitor : public InstVisitor<CountAllVisitor> {
   int Count;
   CountAllVisitor() : Count(1) {}
 
-  void visitICmpInst(ICmpInst &I) { ++Count; }
+  //void visitICmpInst(ICmpInst &I) { ++Count; }
   // void visitFCmpInst(FCmpInst &I)                { ++Count;}
   // void visitAllocaInst(AllocaInst &I)            { ++Count;}
   // void visitLoadInst(LoadInst     &I)            { ++Count;}
@@ -118,10 +118,10 @@ struct CountAllVisitor : public InstVisitor<CountAllVisitor> {
   // void visitCleanupPadInst(CleanupPadInst &I) { ++Count;}
   // void visitCatchPadInst(CatchPadInst &I)     { ++Count;}
   // // void visitFreezeInst(FreezeInst &I)         { ++Count;}
-  // void visitInstruction(Instruction &I) {
-  //   ++Count;
-  //   // OKF("Visiting %u", Count);
-  // }
+   void visitInstruction(Instruction &I) {
+     ++Count;
+     // OKF("Visiting %u", Count);
+   }
 
   // void visitDbgDeclareInst(DbgDeclareInst &I)    { ++Count;}
   // void visitDbgValueInst(DbgValueInst &I)        { ++Count;}
@@ -242,6 +242,10 @@ bool WAFLCoverage::runOnModule(Module &M) {
 
     for (auto &BB : F) {
 
+      /* Increment instruction counters  */
+      CountAllVisitor CAV;
+      CAV.visit(BB);
+
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<> IRB(&(*IP));
 
@@ -297,11 +301,6 @@ bool WAFLCoverage::runOnModule(Module &M) {
 
       /* Set prev_loc_desc to cur_loc_desc */
       IRB.CreateStore(CurLocDesc, AFLPrevLocDesc);
-
-      
-      /* Increment instruction counters  */
-      CountAllVisitor CAV;
-      CAV.visit(BB);
 
       i32  log_count = (i32) log2(CAV.Count);
       if(log_count<0)

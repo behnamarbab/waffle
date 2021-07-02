@@ -12,6 +12,10 @@
 
    Copyright 2019, 2020 SZU Inc. All rights reserved.
 
+   Waffle is written and maintained by behnamarbab <behnamarbab@gmail.com>
+
+   Copyright 2021 UNB. All rights reserved.
+
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
    You may obtain a copy of the License at:
@@ -261,7 +265,6 @@ struct queue_entry {
 
   u64 exec_us,                        /* Execution time (us)              */
       handicap,                       /* Number of queue cycles behind    */
-      stackScore,                     /* Added: sizeScore (wcventure)     */
       depth;                          /* Path depth                       */
 
   i32 total_icnt;                    /* Total number of instructions     */
@@ -271,6 +274,7 @@ struct queue_entry {
 
 };
 
+EXP_ST i64 total_icnt = 0;
 EXP_ST i32 max_total_icnt = 0;
 EXP_ST i32 total_icnt_cur = 0;
 EXP_ST u8* last_method;
@@ -348,7 +352,7 @@ enum {
   /* 05 */ FAULT_NOBITS
 };
 
-/* The method of fuzzing: AFL, Memlock or Waffle */
+/* The method of fuzzing: AFL, Memlock or Waffle, (testing parallel fuzzing)*/
 enum METHOD {
   /* 000 */ METH_NON=0,
   /* 001 */ METH_AFL=1,
@@ -356,8 +360,6 @@ enum METHOD {
   /* 100 */ METH_WFL=4,
   /* 111 */ METH_ALL=7
 };
-
-/* start: wcventure added in MemLock (wcventure)*/ 
 
 static inline u32 UR(u32 limit);
 
@@ -1144,22 +1146,6 @@ static u32 count_bytes(u8* mem) {
 
   return ret;
 }
-
-// static u32 count_dwords(u32 * mem) {
-
-//   u32* ptr = (u32*)mem;
-//   u32  i   = ICNT_SIZE;
-//   u32  ret = 0;
-
-//   while (i--) {
-
-//     if(*(ptr++)) ret++;
-
-//   }
-
-//   return ret;
-// }
-
 
 /* Count the number of non-255 bytes set in the bitmap. Used strictly for the
    status screen, several calls per second or so. */
@@ -2772,8 +2758,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     }
 
     cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+    cksum_icnt = hash32(icnt_bits, ICNT_SIZE*sizeof(icnt_bits[0]), HASH_CONST);
 
-    if (q->exec_cksum != cksum) {
+    if (q->exec_cksum != cksum || q->icnt_cksum != cksum_icnt) {
 
       u8 hnb = has_new_bits(virgin_bits);
       if (hnb > new_bits) new_bits = hnb;
@@ -2803,7 +2790,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
         q->exec_cksum = cksum;
         /* setup the perf cksum here. Assume it is not variable, or that 
           variability will be detected in the regular checking */ 
-        q->icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(icnt_bits[0]), HASH_CONST); 
+        q->icnt_cksum = cksum_icnt; 
 
         memcpy(first_trace, trace_bits, MAP_SIZE);
 
@@ -2830,6 +2817,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
   total_bitmap_size += q->bitmap_size;
   total_bitmap_entries++;
+  total_icnt += q->total_icnt;
 
   update_bitmap_score(q);
 
@@ -2922,16 +2910,6 @@ static void perform_dry_run(char** argv) {
 
     res = calibrate_case(argv, q, use_mem, 0, 1);
 	
-	/* start: dry run中将seed加入top_mem (wcventure) 
-    int cksumLocation = -1;
-    int insertLocation = -1;
-    u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-    if (has_higher_score(cksum, &cksumLocation, &insertLocation) > 0){
-      add_to_top_mem(q, cksumLocation, insertLocation); //careful: not queue_top
-    }
-     end: dry run中将seed加入top_mem */
-	
-	
     ck_free(use_mem);
 
     if (stop_soon) return;
@@ -2945,8 +2923,7 @@ static void perform_dry_run(char** argv) {
       case FAULT_NONE:
         if (q == queue) {
           check_map_coverage();
-
-          // Populates the max_counts properly.
+          // Populates the max_counts properly. <behnamarbab>
           has_new_max();
         }
 
@@ -3345,8 +3322,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
        future fuzzing, etc. */
 
     hnb = has_new_bits(virgin_bits);
-    // are there some subtleties here of when the max should be set? TODO
-    has_new_max();
+    hnm_icnt = has_new_max();
 
     if (!hnb) {
       if (crash_mode) total_crashes++;
@@ -3364,7 +3340,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     fn = alloc_printf("%s/queue/id_%06u", out_dir, queued_paths);
 
 #endif /* ^!SIMPLE_FILES */
-
+  
     // DEBUG("Q.add: %02u hnm_icnt: %d\n", queued_paths, hnm_icnt);
 
 	if (queue_cur->exec_cksum == cksum){ // (wcventure)
@@ -3373,10 +3349,15 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 		delete_from_queue(cksum);
 		add_to_queue(fn, len, 0);
 	}
-  // ! maybe has_new_cov could be different for each stage
-  if (hnm_icnt & 2) {
+
+  if (hnb & 2) {
     queue_top->has_new_cov = 1;
     queued_with_cov++;
+  }
+
+  if (hnm_icnt & 2) {
+    queue_top->has_new_icnt = 1;
+    queued_with_icnt++;
   }
 
   queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);    
@@ -3396,15 +3377,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   close(fd);
 
   keeping = 1;
-	
-	/* start: calibrate_case后将该得分高的seed加入top_mem (wcventure) 
-	int cksumLocation = -1;
-	int insertLocation = -1;
-	u32 hhs = has_higher_score(cksum, &cksumLocation, &insertLocation);
-    if (hhs > 0){
-      add_to_top_mem(queue_top, cksumLocation, insertLocation);
-    }
-     end: calibrate_case后将该得分高的seed加入top_mem */
 
   }
 
@@ -4307,15 +4279,13 @@ static void show_stats(void) {
   }
 
   SAYF(bSTG bV bSTOP "  total paths : " cRST "%-5s  " bSTG bV "\n",
-       DI(queued_paths-queued_deadNum)); // (wcventure)
+       DI(queued_paths));
 
   /* Highlight crashes in red if found, denote going over the KEEP_UNIQUE_CRASH
      limit with a '+' appended to the count. */
 
   sprintf(tmp, "%s%s", DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
-
-  // sprintf(tmp, "%s", DI(queued_deadNum));
 
   SAYF(bV bSTOP " last uniq crash : " cRST "%-34s " bSTG bV bSTOP
        " uniq crashes : %s%-6s " bSTG bV "\n",
@@ -4382,10 +4352,10 @@ static void show_stats(void) {
 
   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
 
-  sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_cov),
-          ((double)queued_with_cov) * 100 / queued_paths);
+  sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_icnt),
+          ((double)queued_with_icnt) * 100 / queued_paths);
 
-  SAYF("  new edges on : " cRST "%-22s " bSTG bV "\n", tmp);
+  SAYF("  new icnts on : " cRST "%-22s " bSTG bV "\n", tmp);
 
   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
@@ -4426,16 +4396,10 @@ static void show_stats(void) {
 
   SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-22s " bSTG bV "\n", tmp);
 
-  /* start: print Recursive depth (wcventure) */
-  // │                                     │  Total insts  : 54                     │
-
   u8 *method_stage_name = "AFL";
 
   if(check_stage(METH_WFL)) {
     method_stage_name = "Waffle";
-  } else
-  if(check_stage(METH_MEM)) {
-    method_stage_name = "Memlock";
   }
 
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
@@ -4593,22 +4557,6 @@ static void show_stats(void) {
 #endif /* ^HAVE_AFFINITY */
 
   } else SAYF("\r");
-
-  /* Hallelujah! */
-  
-  /* start: show Top 10 (wcventure) 
-  SAYF(bVR bH cCYA bSTOP "  Memory cost Top 10\n");
-  
-  int k;
-  for (k=0; k<10; k++){
-    if (strcmp(top_mem[k]->fname, "NULL") == 0)
-      break;
-    sprintf(tmp, "%-42.42s, SLen =%8llu, MSize =%8llu", top_mem[k]->fname, top_mem[k]->stackScore);
-    SAYF(" %2d:" cRST "%-37s \n", k+1, tmp);
-  }
-  
-  SAYF("--------------------------------------------------------------------------------");
-   end: show Top 10*/
 
   fflush(0);
 
@@ -4976,6 +4924,7 @@ static u32 calculate_score(struct queue_entry* q) {
   u32 avg_exec_us = total_cal_us / total_cal_cycles;
   u32 avg_bitmap_size = total_bitmap_size / total_bitmap_entries;
   u32 perf_score = 100;
+  u64 avg_total_icnt = total_icnt / total_bitmap_entries;
 
   /* Adjust score based on execution speed of this path, compared to the
      global average. Multiplier ranges from 0.1x to 3x. Fast inputs are
@@ -5029,11 +4978,11 @@ static u32 calculate_score(struct queue_entry* q) {
 
   }
 
-  // if (q->total_icnt * 5 > max_total_icnt * 4) perf_score *= 1.5;
-  // else if(q->total_icnt * 5 > max_total_icnt * 3) perf_score *= 1.2;
-  // else if(q->total_icnt * 5 > max_total_icnt * 2) perf_score *= 0.8;
-  // else if(q->total_icnt * 5 > max_total_icnt * 1) perf_score *= 0.5;
-  // else perf_score *= 0.2;
+  if (q->total_icnt > avg_total_icnt * 3) perf_score *= 1.4;
+  else if(q->total_icnt > avg_total_icnt * 2) perf_score *= 1.2;
+  else if(q->total_icnt > avg_total_icnt) perf_score *= 0.85;
+  else if(q->total_icnt > avg_total_icnt * 0.75) perf_score *= 0.7;
+  else perf_score *= 0.5;
 
   /* Make sure that we don't go over limit. */
 
@@ -5345,7 +5294,7 @@ static u8 fuzz_one(char** argv) {
    ************/
 
   if (!dumb_mode && !queue_cur->trim_done) {
-    // ! Trimming must be done!
+
     u8 res = trim_case(argv, queue_cur, in_buf);
 
     if (res == FAULT_ERROR)
@@ -6833,15 +6782,12 @@ retry_splicing:
 
     /* Pick a random queue entry and seek to it. Don't splice with yourself. */
 
-    do { 
-	  tid = UR(queued_paths-queued_deadNum); //(wcventure) 
-	  } while (tid == current_entry);
+    do { tid = UR(queued_paths); } while (tid == current_entry);
 
     splicing_with = tid;
     target = queue;
 
-    /*无奈之举，next_100已经乱了 (wcventure) */
-    //while (tid >= 100) {target = target->next_100; tid -= 100; }
+    while (tid >= 100) { target = target->next_100; tid -= 100; }
     while (tid--) target = target->next;
 
     /* Make sure that the target has a reasonable length. */
@@ -8021,7 +7967,7 @@ int main(int argc, char** argv) {
   struct timeval tv;
   struct timezone tz;
 
-  SAYF(cCYA " Memlock-stack-fuzzer: memlock-stack-fuzz " cBRI VERSION cRST " by <wcventure@126.com>\n");
+  SAYF(cCYA " Waffle-fuzzer: waffle-fuzz " cBRI VERSION cRST " by <behnamarbab>\n");
 
   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
@@ -8326,7 +8272,6 @@ int main(int argc, char** argv) {
     if (stop_soon) goto stop_fuzzing;
   }
 
-  queued_deadNum = 0;// (wcventure)
   queue_pre = NULL;
 
   u8 stages[] = {METH_WFL, METH_AFL, METH_MEM};

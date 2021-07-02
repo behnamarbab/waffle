@@ -1,5 +1,7 @@
 #include<stdio.h>
 
+const int SIZE = 100;
+
 void swap(char* a, char* b) {
 	int t = *a; *a = *b; *b = t;
 }
@@ -34,7 +36,7 @@ int parseFile(char *filename, char *arr) {
     if (file == NULL)
       return 0;
 
-    while ((c = fgetc(file)) != EOF)
+    while (n<SIZE-1 &&(c = fgetc(file)) != EOF)
     {
         arr[n++] = (char) c;
     }
@@ -45,7 +47,7 @@ int parseFile(char *filename, char *arr) {
 }
 
 void printArray(char *arr, int n) {
-    for(int i = 0; i<n && i<1000; i++) printf("%c ", arr[i]);
+    for(int i = 0; i<n && i<SIZE; i++) printf("%c ", arr[i]);
 }
 
 int main(int argc, char *argv[]) {
@@ -53,8 +55,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     char *filename = argv[1];
-	char arr[1000];
+	char arr[SIZE];
     int n = parseFile(filename, arr);
+    if(n>=1000) n=SIZE;
 	quickSort(arr, 0, n-1);
 	printArray(arr, n);
 	return 0;
