@@ -1,16 +1,18 @@
 #include<stdio.h>
 
 const int SIZE = 100;
+int counter = 0;
 
 void swap(char* a, char* b) {
 	int t = *a; *a = *b; *b = t;
+	counter++;
 }
 
 int partition (char arr[], int low, int high) {
 	char pivot = arr[high];
 	int i = (low - 1); // Index of smaller element
 	for (int j = low; j <= high- 1; j++)
-		if (arr[j] <= pivot) {
+		if (arr[j] < pivot) {
 			i++; // increment index of smaller element
 			swap(&arr[i], &arr[j]);
 		}
@@ -48,6 +50,7 @@ int parseFile(char *filename, char *arr) {
 
 void printArray(char *arr, int n) {
     for(int i = 0; i<n && i<SIZE; i++) printf("%c ", arr[i]);
+	printf("\nCounter: %d", counter);
 }
 
 int main(int argc, char *argv[]) {
@@ -57,7 +60,7 @@ int main(int argc, char *argv[]) {
     char *filename = argv[1];
 	char arr[SIZE];
     int n = parseFile(filename, arr);
-    if(n>=1000) n=SIZE;
+    if(n>=SIZE) n=SIZE;
 	quickSort(arr, 0, n-1);
 	printArray(arr, n);
 	return 0;

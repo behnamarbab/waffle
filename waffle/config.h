@@ -319,9 +319,7 @@
 
 // Size of the array of counters for each type of instruction
 
-#define ICNT_SIZE_POW2      16
-#define ICNT_SIZE           MAP_SIZE
-// #define ICNT_SIZE           (1 << ICNT_SIZE_POW2)
+#define MULT_TRESH           (float) 1.00
 
 #define MAX_CNT_MULT        1.05
 #define MAX_FAV_MULT        1.10

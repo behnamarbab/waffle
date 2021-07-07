@@ -171,8 +171,6 @@ bool WAFLCoverage::runOnModule(Module &M) {
 
   IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
   IntegerType *Int32Ty = IntegerType::getInt32Ty(C);
-  PointerType *CharPtrTy = PointerType::getUnqual(Int8Ty);
-  Type *VoidTy = Type::getVoidTy(C);
 
   /* Show a banner */
 
@@ -204,47 +202,36 @@ bool WAFLCoverage::runOnModule(Module &M) {
   llvm::LLVMContext& context = M.getContext ();
   llvm::IRBuilder<> builder(context); 
 
-  std::vector<Type *> icnt_args(1, Type::getInt32Ty(context));
-  llvm::FunctionType *icntIncrement =
-      llvm::FunctionType::get(builder.getVoidTy(), icnt_args, false);
-  llvm::Function *icnt_Increment =
-      llvm::Function::Create(icntIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
+  std::vector<Type *> ORC_args(1, Type::getInt32Ty(context));
+  llvm::FunctionType *ORCIncrement =
+      llvm::FunctionType::get(builder.getVoidTy(), ORC_args, false);
+  llvm::Function *ORC_Increment =
+      llvm::Function::Create(ORCIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
 
   GlobalVariable *AFLMapPtr =
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_area_ptr");
 
-  GlobalVariable *AFLIcntPtr =
+  GlobalVariable *AFLORCPtr =
       new GlobalVariable(M, PointerType::get(Int32Ty, 0), false,
-                         GlobalValue::ExternalLinkage, 0, "__afl_icnt_ptr");
+                         GlobalValue::ExternalLinkage, 0, "__afl_ORC_ptr");
 
   GlobalVariable *AFLPrevLoc = new GlobalVariable(
       M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
       0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
-  GlobalVariable *AFLPrevLocDesc = new GlobalVariable(
-      M, CharPtrTy, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc_desc",
-      0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
-
-  ConstantInt* ICNTMask = ConstantInt::get(Int32Ty, ICNT_SIZE-1);
-
-  Function* LogLocationsFunc = Function::Create(FunctionType::get(VoidTy, 
-      ArrayRef<Type*>({CharPtrTy, CharPtrTy}), true), GlobalVariable::ExternalLinkage,
-      "__afl_log_loc", &M);
-  
-
   /* Instrument all the things! */
 
   int inst_blocks = 0;
-  int total_lg_icnts = 0;
+  int total_lg_ORCs = 0;
 
   for (auto &F : M) {
 
     for (auto &BB : F) {
 
-      /* Increment instruction counters  */
-      CountAllVisitor CAV;
-      CAV.visit(BB);
+          /* Increment instruction counters  */
+          CountAllVisitor CAV;
+          CAV.visit(BB);
 
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<> IRB(&(*IP));
@@ -257,7 +244,6 @@ bool WAFLCoverage::runOnModule(Module &M) {
       
       /* Get current source location information */
       std::string cur_loc_desc = bb_description(BB);
-      Value* CurLocDesc = IRB.CreateGlobalStringPtr(cur_loc_desc);
 
       /* Load prev_loc */
 
@@ -266,19 +252,13 @@ bool WAFLCoverage::runOnModule(Module &M) {
       Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());
 
       /* Get edge ID as XOR */
-      Value* EdgeId = IRB.CreateXor(PrevLocCasted, CurLoc);
+      Value* EdgeID = IRB.CreateXor(PrevLocCasted, CurLoc);
 
       /* Load SHM pointer */
 
       LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
       MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      Value *MapPtrIdx =
-          IRB.CreateGEP(MapPtr, EdgeId);
-
-      LoadInst *IcntPtr = IRB.CreateLoad(AFLIcntPtr);
-      IcntPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      Value *IcntBranchPtr =
-        IRB.CreateGEP(IcntPtr, IRB.CreateAnd(EdgeId, ICNTMask));
+      Value *MapPtrIdx = IRB.CreateGEP(MapPtr, EdgeID);
 
       /* Update bitmap */
 
@@ -294,33 +274,29 @@ bool WAFLCoverage::runOnModule(Module &M) {
           IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> 1), AFLPrevLoc);
       Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
-      /* Possibly log location */
-      LoadInst* PrevLocDesc = IRB.CreateLoad(AFLPrevLocDesc);
-      IRB.CreateCall(LogLocationsFunc, ArrayRef<Value*>({ PrevLocDesc, CurLocDesc }));
-      
+          //  ! ================================================================
+          i32  log_count = (i32) log2(CAV.Count);                           //!=
+          if(log_count<0)                                                   //!=
+            log_count = 0;                                                  //!=
+          //  ! ================================================================
+          LoadInst *ORCPtr = IRB.CreateLoad(AFLORCPtr);                     //!=
+          ORCPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *ORCBranchPtr = IRB.CreateGEP(ORCPtr, EdgeID);              //!=
+          //  ! ================================================================
+          Value *CNT = IRB.getInt32(log_count);                             //!=
+          
+          LoadInst *ORCLoad = IRB.CreateLoad(ORCBranchPtr);                 //!=
+          Value *ORCIncr = IRB.CreateAdd(ORCLoad, CNT);                     //!=
 
-      /* Set prev_loc_desc to cur_loc_desc */
-      IRB.CreateStore(CurLocDesc, AFLPrevLocDesc);
+          IRB.CreateStore(ORCIncr, ORCBranchPtr)
+              ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
-      i32  log_count = (i32) log2(CAV.Count);
-      if(log_count<0)
-        log_count = 0;
-      
-      // Value *CNT = IRB.getInt32(1);
-      Value *CNT = IRB.getInt32(log_count);// IRB.CreateCall(icnt_Increment, ArrayRef<Value*>({ CNT }));
-      
-      LoadInst *IcntLoad = IRB.CreateLoad(IcntBranchPtr);
-      Value *IcntIncr = IRB.CreateAdd(IcntLoad, CNT);
-
-      IRB.CreateStore(IcntIncr, IcntBranchPtr)
-          ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-
-      IRB.CreateCall(icnt_Increment, ArrayRef<Value*>({ CNT }));
+          IRB.CreateCall(ORC_Increment, ArrayRef<Value*>({ CNT }));         //!=
+          //  ! ================================================================
+          total_lg_ORCs += log_count;                                       //!=
+          //  ! ================================================================
 
       inst_blocks++;
-      // OKF("- %d -", log_count);
-      total_lg_icnts += log_count;
-
     }
 
   }
@@ -333,7 +309,7 @@ bool WAFLCoverage::runOnModule(Module &M) {
     else OKF("Instrumented %u locations (%s mode, ratio %u%%).\n    Total: %d",
              inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
              ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
-              "ASAN/MSAN" : "non-hardened"), inst_ratio, total_lg_icnts);
+              "ASAN/MSAN" : "non-hardened"), inst_ratio, total_lg_ORCs);
 
   }
 

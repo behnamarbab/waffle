@@ -150,8 +150,9 @@ static s32 forksrv_pid,               /* PID of the fork server           */
 
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
-EXP_ST u32* icnt_bits;                /* ICNT - SHM with 2nd variable     */
-EXP_ST u32 max_icnts[ICNT_SIZE];      /* ICNT - keeps track of max value  */
+EXP_ST u32* ORCs;                     /* ORC - SHM with 2nd variable     */
+EXP_ST u32 elite_ORCs[MAP_SIZE];                /*   */
+
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -167,14 +168,13 @@ static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    child_timed_out;   /* Traced process timed out?        */
 
 EXP_ST u32 queued_paths,              /* Total number of queued testcases */
-		       queued_deadNum,            /* Total dead number (wcventure)    */
            queued_variable,           /* Testcases with variable behavior */
            queued_at_start,           /* Total number of initial inputs   */
            queued_discovered,         /* Items discovered during this run */
            queued_imported,           /* Items imported via -S            */
            queued_favored,            /* Paths deemed favorable           */
            queued_with_cov,           /* Paths with new coverage bytes    */
-           queued_with_icnt,          /* Paths with new max_icnt dwords   */
+           queued_with_ORC,          /* Paths with new max_ORC dwords   */
            pending_not_fuzzed,        /* Queued but not done yet          */
            pending_favored,           /* Pending favored paths            */
            cur_skipped_paths,         /* Abandoned inputs in cur cycle    */
@@ -254,32 +254,46 @@ struct queue_entry {
       was_fuzzed,                     /* Had any fuzzing done yet?        */
       passed_det,                     /* Deterministic stages passed?     */
       has_new_cov,                    /* Triggers new coverage?           */
-      has_new_icnt,                    /* Triggers new max icnt?           */
+      has_new_ORC,                    /* Triggers a higher ORC?           */
       var_behavior,                   /* Variable behavior?               */
       favored,                        /* Currently favored?               */
       fs_redundant;                   /* Marked as redundant in the fs?   */
 
   u32 bitmap_size,                    /* Number of bits set in bitmap     */
-      exec_cksum,                     /* Checksum of the execution trace  */
-      icnt_cksum;
+      exec_cksum;                     /* Checksum of the execution trace  */
 
   u64 exec_us,                        /* Execution time (us)              */
       handicap,                       /* Number of queue cycles behind    */
       depth;                          /* Path depth                       */
 
-  i32 total_icnt;                    /* Total number of instructions     */
+  u8* trace_mini;                     /* Trace bytes, if kept             */
+  u32 tc_ref;                         /* Trace bytes ref count            */
+
+  u32 TORC;                           /* Total ORC                        */
+  u32 elite_ORC;                      /* Elite ORC                        */
+  u32 elite_index;                    /* Elite index                      */
 
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
 
 };
 
-EXP_ST i64 total_icnt = 0;
-EXP_ST i32 max_total_icnt = 0;
-EXP_ST i32 total_icnt_cur = 0;
+EXP_ST const float EPS = 0.000001;
+
+EXP_ST i64 TORC = 0;
+EXP_ST i32 max_TORC = 0;
+EXP_ST i32 TORC_cur = 0;
+// EXP_ST u32 max_elite_ORC = 0;
+EXP_ST float max_ORC_ratio = 1;
+EXP_ST u32 elite_index = -1;
+EXP_ST u32 ORC_elite = -1;
 EXP_ST u8* last_method;
 
-static struct queue_entry *queue_dead = NULL; /* dead queue (wcventure)   */
+EXP_ST void clean_elite_tracers() {
+  max_ORC_ratio = 1.0;
+  elite_index = -1;
+}
+
 
 static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
                           *queue_cur, /* Current offset within the queue  */
@@ -287,9 +301,7 @@ static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
                           *queue_top, /* Top of the list                  */
                           *q_prev100; /* Previous 100 marker              */
 
-static struct queue_entry **top_rated,/* Top entries for bitmap bytes     */
-              **top_rated_icnt;       /* Top entries for icnt bytes       */
-
+static struct queue_entry **top_rated;/* Top entries for bitmap bytes     */
 
 struct extra_data {
   u8* data;                           /* Dictionary token data            */
@@ -365,59 +377,22 @@ static inline u32 UR(u32 limit);
 
 struct sys_data
 {
-  int MaxInstCount;
+  int TORC;
 };
 
 struct sys_data* mem_data;                /* SHM (wcventure) - behnamarbab  */
 
-void ReadMemStatus(){
-  total_icnt_cur = mem_data->MaxInstCount;
-  if(total_icnt_cur > max_total_icnt) {
-    max_total_icnt = total_icnt_cur;
+void ReadTORC(){
+  TORC_cur = mem_data->TORC;
+  if(TORC_cur > max_TORC) {
+    max_TORC = TORC_cur;
   }
 }
-
-// start: 如果没有has_new_bit, 找cuskm一样的，从链表中删除
-void delete_from_queue(u32 cksum){
-  struct queue_entry *de = queue;
-  if (de->next == NULL)
-    return;
-  
-  do{
-    if(de->next->exec_cksum==cksum){
-
-      if(de->next == queue_top)//找到自己了，往往是跟id000一样的，id000不可删除
-        break;
-
-      struct queue_entry *temp = de->next->next;
-      if (queue_dead == NULL){//重复的低分cksum的实例加入queue_dead
-        queue_dead = de->next;
-        de->next->was_fuzzed = 1;
-        de->next->total_icnt = -1;//因为next还不能删除，做一个标记，是否是最后一个，避免最后doublefree
-      } else {
-        //找到queue的最后一个
-        struct queue_entry *dead_tmp = queue_dead;
-        while(dead_tmp->total_icnt != -1)
-          dead_tmp = dead_tmp->next;
-        dead_tmp->total_icnt = 0;//0代表不是最后一个的标记
-        dead_tmp->next = de->next;
-        dead_tmp->next->was_fuzzed = 1;
-        dead_tmp->next->total_icnt = -1;//因为next还不能删除，做一个标记，是否是最后一个，避免最后doublefree
-      }
-      de->next = temp;
-      //queued_paths--;//path总数减一(queued_paths不能减，总数是queued_paths)
-      queued_deadNum++;//queued_deadNum计数加一
-      break;
-    }
-    de = de->next;
-  }while(de->next != NULL);
-}
-
 
 void DEBUG (char const *fmt, ...) {
     static FILE *f = NULL;
     if (f == NULL) {
-      u8 * fn = alloc_printf("%s/max-ct-fuzzing.log", out_dir);
+      u8 * fn = alloc_printf("%s/waffle-fuzzing.log", out_dir);
       f= fopen(fn, "w");
       ck_free(fn);
     }
@@ -887,7 +862,8 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
-  q->total_icnt   = total_icnt_cur;
+  // q->TORC         = TORC_cur;
+  // q->elite_ORC    = 0;
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -925,24 +901,10 @@ EXP_ST void destroy_queue(void) {
 
     n = q->next;
     ck_free(q->fname);
+    ck_free(q->trace_mini);
     ck_free(q);
     q = n;
 
-  }
-  
-  /* start: free the dead queue (wcventure) */
-  struct queue_entry *d = queue_dead;
-  while (d) {
-    if (d->total_icnt == -1){//已经到尾部了
-      ck_free(d->fname);
-      ck_free(d);  
-      break;
-    }
-
-    n = d->next;
-    ck_free(d->fname);
-    ck_free(d);
-    d = n;
   }
   /* end: free the dead queue */
 
@@ -988,6 +950,38 @@ EXP_ST void read_bitmap(u8* fname) {
 
 }
 
+static u8 update_possible_elite(int index) {
+
+  if(elite_ORCs[index]){
+    
+    float oratio = (float)ORCs[index] / elite_ORCs[index];
+
+    if(elite_ORCs[index] < ORCs[index] && oratio > MULT_TRESH) {
+      elite_ORCs[index] = ORCs[index];
+    }
+
+    /* a higher oratio is found */
+    if (max_ORC_ratio + EPS < oratio) {
+      max_ORC_ratio = oratio;
+      elite_index = index;
+      ORC_elite = ORCs[index];
+      
+      return 1;
+    }
+  }
+  else {
+    elite_ORCs[index] = ORCs[index];
+    
+    if (elite_index == -1) {
+      elite_index = index;
+      ORC_elite = ORCs[index];
+
+      return 1;
+    }
+  }
+
+  return 0;
+}
 
 /* Check if the current execution path brings anything new to the table.
    Update virgin bits to reflect the finds. Returns 1 if the only change is
@@ -997,12 +991,13 @@ EXP_ST void read_bitmap(u8* fname) {
    This function is called after every exec() on a fairly large buffer, so
    it needs to be fast. We do this in 32-bit and 64-bit flavors. */
 
-static inline u8 has_new_bits(u8* virgin_map) {
+static inline u8 has_anything_new(u8* virgin_map) {
 
 #ifdef __x86_64__
 
   u64* current = (u64*)trace_bits;
   u64* virgin  = (u64*)virgin_map;
+  clean_elite_tracers();
 
   u32  i = (MAP_SIZE >> 3);
 
@@ -1015,7 +1010,8 @@ static inline u8 has_new_bits(u8* virgin_map) {
 
 #endif /* ^__x86_64__ */
 
-  u8   ret = 0;
+  u8         ret = 0;
+  u8 elite_found = 0;
 
   while (i--) {
 
@@ -1023,35 +1019,44 @@ static inline u8 has_new_bits(u8* virgin_map) {
        that have not been already cleared from the virgin map - since this will
        almost always be the case. */
 
-    if (unlikely(*current) && unlikely(*current & *virgin)) {
-
-      if (likely(ret < 2)) {
-
-        u8* cur = (u8*)current;
-        u8* vir = (u8*)virgin;
-
-        /* Looks like we have not found any new bytes yet; see if any non-zero
-           bytes in current[] are pristine in virgin[]. */
-
-#ifdef __x86_64__
-
-        if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
-            (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
-            (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
-            (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff)) ret = 2;
-        else ret = 1;
-
-#else
-
-        if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
-            (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff)) ret = 2;
-        else ret = 1;
-
-#endif /* ^__x86_64__ */
-
+    if (unlikely(*current)) {
+      int I = (i<<3);
+      for(int index = I; index<I+8; index++) {
+        if(ORCs[i])
+          if(update_possible_elite(index)) {
+            elite_found = 1;
+          }
       }
+      if(unlikely(*current & *virgin)) {
+        
+        if (likely(ret < 2)) {
+
+          u8* cur = (u8*)current;
+          u8* vir = (u8*)virgin;
+
+          /* Looks like we have not found any new bytes yet; see if any non-zero
+            bytes in current[] are pristine in virgin[]. */
+
+  #ifdef __x86_64__
+
+          if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+              (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
+              (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
+              (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff)) ret = 2;
+          else ret = 1;
+
+  #else
+
+          if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+              (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff)) ret = 2;
+          else ret = 1;
+
+  #endif /* ^__x86_64__ */
+
+        }
 
       *virgin &= ~*current;
+      }
 
     }
 
@@ -1062,30 +1067,8 @@ static inline u8 has_new_bits(u8* virgin_map) {
 
   if (ret && virgin_map == virgin_bits) bitmap_changed = 1;
 
-  return ret;
+  return ret | (elite_found << 2);
 
-}
-
-
-/* whether the trace_bits attain some new maximum value for 
-   some i. updates max_counts with max counts.
-   */
-static inline u8 has_new_max() {
-  int ret = 0;
-
-  for (int i = 0; i < ICNT_SIZE; i++) {
-    if (unlikely(icnt_bits[i]) && unlikely(icnt_bits[i] > MAX_CNT_MULT*max_icnts[i])) {
-      if(likely(ret<2)) {
-        ret = 2;
-        max_icnts[i] = icnt_bits[i];
-      }
-      else {
-        ret = 1;
-      }
-    }
-  }
-  
-  return ret;
 }
 
 /* Count the number of bits set in the provided bitmap. Used for the status
@@ -1350,18 +1333,18 @@ static void remove_shm(void) {
    count information here. This is called only sporadically, for some
    new paths. */
 
-// static void minimize_bits(u8* dst, u8* src) {
+static void minimize_bits(u8* dst, u8* src) {
 
-//   u32 i = 0;
+  u32 i = 0;
 
-//   while (i < MAP_SIZE) {
+  while (i < MAP_SIZE) {
 
-//     if (*(src++)) dst[i >> 3] |= 1 << (i & 7);
-//     i++;
+    if (*(src++)) dst[i >> 3] |= 1 << (i & 7);
+    i++;
 
-//   }
+  }
 
-// }
+}
 
 
 /* When we bump into a new path, we call this to see if the path appears
@@ -1377,55 +1360,52 @@ static void remove_shm(void) {
    In the case of performance fuzzing, we win if we maximize the count at some
    key with a non-zero value.   */
 
-u8 check_stage(u8 stage) {
-  return stage & method_stage;
-}
-
-void check_max(u32 cur_icnt){
-  if(max_total_icnt < cur_icnt) {
-    max_total_icnt = cur_icnt;
-    // last_method = method_stage_name;
-  }
-}
-
 static void update_bitmap_score(struct queue_entry* q) {
 
   u32 i;
-  long double fav_factor = q->total_icnt * q->len;
-  u64 fav_factor_classic = q->exec_us * q->len;
-
+  u64 fav_factor = q->exec_us * q->len;
 
   /* For every byte set in trace_bits[], see if there is a previous winner,
      and how it compares to us. */
 
-  for (i = 0; i < ICNT_SIZE; i++)
+  for (i = 0; i < MAP_SIZE; i++)
 
-    if (icnt_bits[i]) {
+    if (trace_bits[i]) {
 
-       if (top_rated_icnt[i]) {
+       if (top_rated[i]) {
 
          /* Faster-executing or smaller test cases are favored. */
 
-         if (fav_factor > top_rated_icnt[i]->total_icnt * top_rated_icnt[i]->len) continue;
+         if (top_rated[i]->elite_index == i) {
 
-         if (fav_factor_classic > top_rated_icnt[i]->exec_us * top_rated_icnt[i]->len) continue;
+         }
+         else if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
 
+         /* Looks like we're going to win. Decrease ref count for the
+            previous winner, discard its trace_bits[] if necessary. */
+
+         if (!--top_rated[i]->tc_ref) {
+           ck_free(top_rated[i]->trace_mini);
+           top_rated[i]->trace_mini = 0;
+         }
 
        }
 
        /* Insert ourselves as the new winner. */
 
-       top_rated_icnt[i] = q;
+       top_rated[i] = q;
+       q->tc_ref++;
+
+       if (!q->trace_mini) {
+         q->trace_mini = ck_alloc(MAP_SIZE >> 3);
+         minimize_bits(q->trace_mini, trace_bits);
+       }
 
        score_changed = 1;
 
      }
 
-  // check_max(q->total_icnt);
-  return;
-
 }
-
 
 /* The second part of the mechanism discussed above is a routine that
    goes over top_rated[] entries, and then sequentially grabs winners for
@@ -1437,12 +1417,14 @@ static void update_bitmap_score(struct queue_entry* q) {
 static void cull_queue(void) {
 
   struct queue_entry* q;
-  
+  static u8 temp_v[MAP_SIZE >> 3];
   u32 i;
 
   if (dumb_mode || !score_changed) return;
 
   score_changed = 0;
+
+  memset(temp_v, 255, MAP_SIZE >> 3);
 
   queued_favored  = 0;
   pending_favored = 0;
@@ -1454,24 +1436,23 @@ static void cull_queue(void) {
     q = q->next;
   }
 
-  for (i = 0; i < ICNT_SIZE; i++) {
-    if (top_rated_icnt[i]) {
-      /* if top rated for any i, will be favored */
-      // DEBUG("+%d\n", i);
-      u8 was_favored_already = top_rated_icnt[i]->favored;
+  for (i = 0; i < MAP_SIZE; i++)
+    if (top_rated[i] && (temp_v[i >> 3] & (1 << (i & 7)))) {
 
-      top_rated_icnt[i]->favored = 1;
+      u32 j = MAP_SIZE >> 3;
 
-      /* increments counts only if not also favored for another i */
-      if (!was_favored_already){
-        queued_favored++;
-        if (!top_rated_icnt[i]->was_fuzzed) pending_favored++;
-      }
-      else {
-        // DEBUG("-%d\n", i);
-      }
+      /* Remove all bits belonging to the current entry from temp_v. */
+
+      while (j--) 
+        if (top_rated[i]->trace_mini[j])
+          temp_v[j] &= ~top_rated[i]->trace_mini[j];
+
+      top_rated[i]->favored = 1;
+      queued_favored++;
+
+      if (!top_rated[i]->was_fuzzed) pending_favored++;
+
     }
-  }
 
   q = queue;
 
@@ -1490,7 +1471,10 @@ EXP_ST void setup_shm(void) {
   u8* shm_str;
   u8* mem_str;
 
-  if (!in_bitmap) memset(virgin_bits, 255, MAP_SIZE);
+  if (!in_bitmap) {
+    memset(virgin_bits, 255, MAP_SIZE);
+    memset(elite_ORCs, 0, MAP_SIZE * sizeof(elite_ORCs[0]));
+  }
 
   memset(virgin_tmout, 255, MAP_SIZE);
   memset(virgin_crash, 255, MAP_SIZE);
@@ -1499,9 +1483,9 @@ EXP_ST void setup_shm(void) {
     map right after the regular bitmap.  */
   /* always allocate so that programs instrumented with afl-clang-fast
      don't cause segfaults */
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + ICNT_SIZE*sizeof(icnt_bits[0]),
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + MAP_SIZE*sizeof(ORCs[0]),
    IPC_CREAT | IPC_EXCL | 0600);
-  shm_sys_data = shmget(IPC_PRIVATE, sizeof(struct sys_data), IPC_CREAT | IPC_EXCL | 0600); //(wcventure)
+  shm_sys_data = shmget(IPC_PRIVATE, sizeof(struct sys_data), IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
   if (shm_sys_data < 0) PFATAL("shmget() failed");
@@ -1524,8 +1508,7 @@ EXP_ST void setup_shm(void) {
   trace_bits = shmat(shm_id, NULL, 0);
   mem_data = shmat(shm_sys_data, NULL, 0);
 
-  // setup icnt bits if needed
-  icnt_bits = (u32 *) (trace_bits + MAP_SIZE);
+  ORCs = (u32 *) (trace_bits + MAP_SIZE);
 
   
   if (!trace_bits) PFATAL("shmat() failed");
@@ -1533,9 +1516,9 @@ EXP_ST void setup_shm(void) {
 
 }
 
-/* set the max counts map to 0 */
-EXP_ST void setup_max_counts() {
-  memset(max_icnts, 0, ICNT_SIZE * sizeof(max_icnts[0]));
+/* set the elite map to 0 */
+EXP_ST void setup_elites() {
+  memset(elite_ORCs, 0, MAP_SIZE * sizeof(elite_ORCs[0]));
 }
 
 
@@ -2423,6 +2406,46 @@ EXP_ST void init_forkserver(char** argv) {
 
 }
 
+// static u8 find_elite(struct queue_entry* q) {
+//   u32 max_elite_ORC = 0;
+//   float max_ORC_ratio = 1;
+//   const float EPS = 0.000001;
+//   u32 elite_index = -1;
+
+//   for (i = 0; i < MAP_SIZE; i++){
+//     if(elite_ORCs[i]){
+//       float oratio = (float)ORCs[i] / elite_ORCs[i];
+//       /* oratio == max_ORC_ratio */
+//       if (max_ORC_ratio - EPS <= oratio && oratio >= max_ORC_ratio + EPS) {
+//         if (max_elite_ORC < ORCs[i]) {
+//           max_elite_ORC = ORCs[i];
+//           elite_index = i;
+//         }
+//       }
+//       /* a higher oratio is found */
+//       else if (oratio > max_ORC_ratio + EPS) {
+//         max_ORC_ratio = oratio;
+//         elite_index = i;
+//       }
+//     } else
+//     /* Yet the untracked ORCCs may become the elite. 10% chance */
+//     if (max_elite_ORC && R(100)>10) continue;
+
+//     else if (max_elite_ORC < ORCs[i]) {
+//       max_elite_ORC = ORCs[i];
+//       elite_index = i;
+//     }
+//   }
+
+//   q->elite_index = elite_index;
+
+//   if(elite_index<0)
+//     return 0;
+
+//   q->elite_ORC = ORCs[elite_index];
+//   return 1;
+// }
+
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
@@ -2442,7 +2465,7 @@ static u8 run_target(char** argv, u32 timeout) {
      territory. */
 
   memset(trace_bits, 0, MAP_SIZE);
-  memset(icnt_bits, 0, ICNT_SIZE * sizeof(icnt_bits[0]));
+  memset(ORCs, 0, MAP_SIZE * sizeof(ORCs[0]));
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -2602,6 +2625,7 @@ static u8 run_target(char** argv, u32 timeout) {
 #endif /* ^__x86_64__ */
 
   prev_timed_out = child_timed_out;
+  
 
   /* Report outcome to caller. */
 
@@ -2703,7 +2727,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
   static u8 first_trace[MAP_SIZE];
 
-  u8  fault = 0, new_bits = 0, new_max = 0, var_detected = 0,
+  u8  fault = 0, has_news = 0, var_detected = 0, han=0,
       first_run = (q->exec_cksum == 0);
 
   u64 start_us, stop_us;
@@ -2731,7 +2755,11 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   if (dumb_mode != 1 && !no_forkserver && !forksrv_pid)
     init_forkserver(argv);
 
-  if (q->exec_cksum) memcpy(first_trace, trace_bits, MAP_SIZE);
+  if (q->exec_cksum) {
+    memcpy(first_trace, trace_bits, MAP_SIZE);
+    han = has_anything_new(virgin_bits);
+    if (han > has_news) has_news = han;
+  }
 
   start_us = get_cur_time_us();
 
@@ -2748,7 +2776,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
     
-    ReadMemStatus();
+    ReadTORC();
 
     if (stop_soon || fault != crash_mode) goto abort_calibration;
 
@@ -2758,15 +2786,13 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     }
 
     cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-    cksum_icnt = hash32(icnt_bits, ICNT_SIZE*sizeof(icnt_bits[0]), HASH_CONST);
 
-    if (q->exec_cksum != cksum || q->icnt_cksum != cksum_icnt) {
+    if (q->exec_cksum != cksum) {
 
-      u8 hnb = has_new_bits(virgin_bits);
-      if (hnb > new_bits) new_bits = hnb;
+      han = has_anything_new(virgin_bits);
 
-      u8 hnm = has_new_max();
-      if (hnm > new_max) new_max = hnm;
+      // New coverage? else, new elite?
+      if (han > has_news) has_news = han;
 
       if (q->exec_cksum) {
 
@@ -2790,7 +2816,6 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
         q->exec_cksum = cksum;
         /* setup the perf cksum here. Assume it is not variable, or that 
           variability will be detected in the regular checking */ 
-        q->icnt_cksum = cksum_icnt; 
 
         memcpy(first_trace, trace_bits, MAP_SIZE);
 
@@ -2812,12 +2837,14 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->bitmap_size = count_bytes(trace_bits);
   q->handicap    = handicap;
   q->cal_failed  = 0;
-  // <behnamarbab>
-  q->total_icnt = (i32) total_icnt_cur;
+
+  q->TORC = (i32) TORC_cur;
+  q->elite_index = elite_index;
+  q->elite_ORC = ORC_elite;
 
   total_bitmap_size += q->bitmap_size;
   total_bitmap_entries++;
-  total_icnt += q->total_icnt;
+  TORC += q->TORC;
 
   update_bitmap_score(q);
 
@@ -2825,18 +2852,18 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
      parent. This is a non-critical problem, but something to warn the user
      about. */
 
-  if (!dumb_mode && first_run && !fault && !new_bits) fault = FAULT_NOBITS;
+  if (!dumb_mode && first_run && !fault && !has_news) fault = FAULT_NOBITS;
 
 abort_calibration:
 
-  if (new_bits == 2 && !q->has_new_cov) {
+  if ( (has_news & 2) && !q->has_new_cov) {
     q->has_new_cov = 1;
     queued_with_cov++;
   }
 
-  if (new_max == 2 && !q->has_new_icnt) {
-    q->has_new_icnt = 1;
-    queued_with_icnt++;
+  if (has_news & 4) {
+    q->has_new_ORC = 1;
+    if(han ^ 2) queued_with_ORC++;
   }
 
   /* Mark variable paths. */
@@ -2915,17 +2942,13 @@ static void perform_dry_run(char** argv) {
     if (stop_soon) return;
 
     if (res == crash_mode || res == FAULT_NOBITS)
-      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us, total_icnt = %d\n" cRST, 
-           q->len, q->bitmap_size, q->exec_us, q->total_icnt);
+      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us, TORC = %d\n" cRST, 
+           q->len, q->bitmap_size, q->exec_us, q->TORC);
 
     switch (res) {
 
       case FAULT_NONE:
-        if (q == queue) {
-          check_map_coverage();
-          // Populates the max_counts properly. <behnamarbab>
-          has_new_max();
-        }
+        if (q == queue) check_map_coverage();
 
         if (crash_mode) FATAL("Test case '%s' does *NOT* crash", fn);
 
@@ -3216,7 +3239,7 @@ static void pivot_inputs(void) {
 /* Construct a file name for a new test case, capturing the operation
    that led to its discovery. Uses a static buffer. */
 
-static u8* describe_op(u8 hnb) {
+static u8* describe_op(u8 han) {
 
   static u8 ret[256];
 
@@ -3246,7 +3269,8 @@ static u8* describe_op(u8 hnb) {
 
   }
 
-  if (hnb == 2) strcat(ret, ",+cov");
+  if (han & 2) strcat(ret, ",+cov");
+  if (han & 4) strcat(ret, ",+orc");
 
   return ret;
 
@@ -3309,22 +3333,20 @@ static void write_crash_readme(void) {
 static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
   u8  *fn = "";
-  u8  hnb = 0;
-  u8  hnm_icnt = 0;
+  u8  han = 0;
+  u8  hnm_ORC = 0;
   s32 fd;
   u8  keeping = 0, res;
-  u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-  // u32 cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(u32), HASH_CONST); 
-
+  
   if (fault == crash_mode) {
 
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
-    hnb = has_new_bits(virgin_bits);
-    hnm_icnt = has_new_max();
+    han = has_anything_new(virgin_bits);
+    // !                Has elite can be called prior to the calibration
 
-    if (!hnb) {
+    if (!han) {
       if (crash_mode) total_crashes++;
       return 0;
     }    
@@ -3333,7 +3355,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 #ifndef SIMPLE_FILES
 
     fn = alloc_printf("%s/queue/id:%06u,%s%s", out_dir, queued_paths,
-                      describe_op(hnb), hnm_icnt ? ",+icnt": "");
+                      describe_op(han), hnm_ORC ? ",+ORC": "");
 
 #else
 
@@ -3341,27 +3363,20 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
   
-    // DEBUG("Q.add: %02u hnm_icnt: %d\n", queued_paths, hnm_icnt);
+  add_to_queue(fn, len, 0);
 
-	if (queue_cur->exec_cksum == cksum){ // (wcventure)
-		add_to_queue(fn, len, 0);
-	} else {
-		delete_from_queue(cksum);
-		add_to_queue(fn, len, 0);
-	}
-
-  if (hnb & 2) {
+  if (han & 2) {
     queue_top->has_new_cov = 1;
     queued_with_cov++;
   }
 
-  if (hnm_icnt & 2) {
-    queue_top->has_new_icnt = 1;
-    queued_with_icnt++;
+  if (han & 4) {
+    queue_top->has_new_ORC = 1;
+    if(han ^ 2) queued_with_ORC++;
   }
 
   queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);    
-  queue_top->icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(icnt_bits[0]), HASH_CONST); 
+  // queue_top->ORC_cksum = hash32(ORCs, MAP_SIZE*sizeof(ORCs[0]), HASH_CONST); 
 
   /* Try to calibrate inline; this also calls update_bitmap_score() when
       successful. */
@@ -3401,7 +3416,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         simplify_trace((u32*)trace_bits);
 #endif /* ^__x86_64__ */
 
-        if (!has_new_bits(virgin_tmout)) return keeping;
+        if (!has_anything_new(virgin_tmout)) return keeping;
 
       }
 
@@ -3416,7 +3431,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         u8 new_fault;
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
-        ReadMemStatus();
+        ReadTORC();
 
         /* A corner case that one user reported bumping into: increasing the
            timeout actually uncovers a crash. Make sure we don't discard it if
@@ -3466,7 +3481,7 @@ keep_as_crash:
         simplify_trace((u32*)trace_bits);
 #endif /* ^__x86_64__ */
 
-        if (!has_new_bits(virgin_crash)) return keeping;
+        if (!has_anything_new(virgin_crash)) return keeping;
 
       }
 
@@ -4352,10 +4367,10 @@ static void show_stats(void) {
 
   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
 
-  sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_icnt),
-          ((double)queued_with_icnt) * 100 / queued_paths);
+  sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_ORC),
+          ((double)queued_with_ORC) * 100 / queued_paths);
 
-  SAYF("  new icnts on : " cRST "%-22s " bSTG bV "\n", tmp);
+  SAYF("  new ORCs on : " cRST "%-22s " bSTG bV "\n", tmp);
 
   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
@@ -4398,14 +4413,10 @@ static void show_stats(void) {
 
   u8 *method_stage_name = "AFL";
 
-  if(check_stage(METH_WFL)) {
-    method_stage_name = "Waffle";
-  }
-
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d - %s", max_total_icnt, last_method);
+  sprintf(tmp, "%d - %s", max_TORC, last_method);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -4691,7 +4702,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
   static u8 tmp[64];
   static u8 clean_trace[MAP_SIZE];
-  static u32 clean_icnt[ICNT_SIZE];
+  static u32 clean_ORC[MAP_SIZE];
 
   u8  needs_write = 0, 
   fault = 0;
@@ -4730,18 +4741,18 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
       u32 trim_avail = MIN(remove_len, q->len - remove_pos);
       u32 exec_cksum;
-      u32 icnt_cksum;
+      // u32 ORC_cksum;
 
       write_with_gap(in_buf, q->len, remove_pos, trim_avail);
 
       fault = run_target(argv, exec_tmout);
       trim_execs++;
-      ReadMemStatus();
+      ReadTORC();
 
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
 
       /* Note that we don't keep track of crashes or hangs here; maybe TODO? */
-      icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(icnt_bits[0]), HASH_CONST);
+      // ORC_cksum = hash32(ORCs, MAP_SIZE*sizeof(ORCs[0]), HASH_CONST);
       exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
 
@@ -4750,7 +4761,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
          best-effort pass, so it's not a big deal if we end up with false
          negatives every now and then. */
 
-      if (exec_cksum == q->exec_cksum && icnt_cksum == q->icnt_cksum)
+      if (exec_cksum == q->exec_cksum)
       {
         u32 move_tail = q->len - remove_pos - trim_avail;
 
@@ -4767,7 +4778,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
           needs_write = 1;
           memcpy(clean_trace, trace_bits, MAP_SIZE);
-          memcpy(clean_icnt, icnt_bits, ICNT_SIZE*sizeof(clean_icnt[0]));
+          memcpy(clean_ORC, ORCs, MAP_SIZE*sizeof(clean_ORC[0]));
 
         }
 
@@ -4801,7 +4812,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
     close(fd);
 
     memcpy(trace_bits, clean_trace, MAP_SIZE);
-    memcpy(icnt_bits, clean_icnt, ICNT_SIZE*sizeof(icnt_bits[0]));
+    memcpy(ORCs, clean_ORC, MAP_SIZE*sizeof(ORCs[0]));
 
     update_bitmap_score(q);
 
@@ -4833,7 +4844,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
 
   fault = run_target(argv, exec_tmout);
-  ReadMemStatus();
+  ReadTORC();
 
   if (stop_soon) return 1;
 
@@ -4924,7 +4935,6 @@ static u32 calculate_score(struct queue_entry* q) {
   u32 avg_exec_us = total_cal_us / total_cal_cycles;
   u32 avg_bitmap_size = total_bitmap_size / total_bitmap_entries;
   u32 perf_score = 100;
-  u64 avg_total_icnt = total_icnt / total_bitmap_entries;
 
   /* Adjust score based on execution speed of this path, compared to the
      global average. Multiplier ranges from 0.1x to 3x. Fast inputs are
@@ -4977,12 +4987,6 @@ static u32 calculate_score(struct queue_entry* q) {
     default:        perf_score *= 5;
 
   }
-
-  if (q->total_icnt > avg_total_icnt * 3) perf_score *= 1.4;
-  else if(q->total_icnt > avg_total_icnt * 2) perf_score *= 1.2;
-  else if(q->total_icnt > avg_total_icnt) perf_score *= 0.85;
-  else if(q->total_icnt > avg_total_icnt * 0.75) perf_score *= 0.7;
-  else perf_score *= 0.5;
 
   /* Make sure that we don't go over limit. */
 
@@ -5273,8 +5277,6 @@ static u8 fuzz_one(char** argv) {
 
     if (queue_cur->cal_failed < CAL_CHANCES) {
 
-      queue_cur->icnt_cksum = 0;
-
       res = calibrate_case(argv, queue_cur, in_buf, queue_cycle - 1, 0);
 
       if (res == FAULT_ERROR)
@@ -5547,21 +5549,17 @@ static u8 fuzz_one(char** argv) {
 
     if (!eff_map[EFF_APOS(stage_cur)]) {
 
-      u32 exec_cksum;
-      u32 icnt_cksum;
+      u32 cksum;
 
       /* If in dumb mode or if the file is very short, just flag everything
          without wasting time on checksums. */
 
-      if (!dumb_mode && len >= EFF_MIN_LEN){
-        exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-        icnt_cksum = hash32(icnt_bits, ICNT_SIZE*sizeof(icnt_bits[0]), HASH_CONST);
-      } else {
-        exec_cksum = ~queue_cur->exec_cksum;
-        icnt_cksum = ~queue_cur->icnt_cksum;
-      }
+      if (!dumb_mode && len >= EFF_MIN_LEN)
+        cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+      else
+        cksum = ~queue_cur->exec_cksum;
 
-      if ((exec_cksum!=queue_cur->exec_cksum) || icnt_cksum!=queue_cur->icnt_cksum) {
+      if (cksum != queue_cur->exec_cksum) {
         eff_map[EFF_APOS(stage_cur)] = 1;
         eff_cnt++;
       }
@@ -6976,7 +6974,7 @@ static void sync_fuzzers(char** argv) {
         write_to_testcase(mem, st.st_size);
 
         fault = run_target(argv, exec_tmout);
-        ReadMemStatus();
+        ReadTORC();
 
         if (stop_soon) return;
 
@@ -7996,7 +7994,7 @@ int main(int argc, char** argv) {
 
         if (in_dir) FATAL("Multiple -i options not supported");
         in_dir = optarg;
-        method_stage = 1; //wcventure
+        method_stage = 1;
 
         if (!strcmp(in_dir, "-")) in_place_resume = 1;
 
@@ -8219,10 +8217,10 @@ int main(int argc, char** argv) {
 
   setup_post();
   setup_shm();
-  setup_max_counts();
+  setup_elites();
 
   // ! Make it work
-  top_rated_icnt = ck_alloc(ICNT_SIZE * sizeof(struct queue_entry *));
+  top_rated = ck_alloc(MAP_SIZE * sizeof(struct queue_entry *));
   // top_rated = ck_alloc(MAP_SIZE * sizeof(struct queue_entry *));
 
   init_count_class16();
@@ -8279,7 +8277,6 @@ int main(int argc, char** argv) {
   while (1) {
     // u64 cur_time = get_cur_time();
     // u8 stage_index = (cur_time / (1000 * 3) % sizeof(stages));
-    // method_stage = stages[stage_index];
     method_stage = stages[0];
 
     u8 skipped_fuzz;
