@@ -50,3 +50,4 @@ waffle/llvm_mode/test-instr.dSYM/
 .vscode/
 
 waffle/rs/
+*.test
