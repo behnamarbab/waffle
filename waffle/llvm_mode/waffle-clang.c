@@ -131,9 +131,6 @@ static void edit_params(u32 argc, char** argv) {
   cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass.so", obj_path);
 #endif /* ^USE_TRACE_PC */
 
-  cc_params[cc_par_cnt++] = "-Qunused-arguments";
-  cc_params[cc_par_cnt++] = alloc_printf("%s/trace_function.o", obj_path);
-
   /* Detect stray -v calls from ./configure scripts. */
 
   if (argc == 1 && !strcmp(argv[1], "-v")) maybe_linking = 0;

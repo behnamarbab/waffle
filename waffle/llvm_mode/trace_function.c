@@ -24,7 +24,7 @@ void __attribute__((constructor)) traceBegin(void) {
 
 void __attribute__((destructor)) traceEnd(void) {
 
-  unsigned char *mem_str = getenv(MEM_ENV_VAR);
+  unsigned char *mem_str = getenv(ERU_ENV_VAR);
 
   if (mem_str) {
 
@@ -43,8 +43,4 @@ void __attribute__((destructor)) traceEnd(void) {
 
     da->MaxInstCount = MaxInstCount;
   }
-}
-
-void instr_AddInsts(int cnt) {
-  MaxInstCount += cnt;
 }

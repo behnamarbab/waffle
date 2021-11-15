@@ -152,7 +152,7 @@ EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
 EXP_ST u32* ERUs;                     /* ERU - SHM with 2nd variable     */
 
-EXP_ST u32 ERU_counters = 0;
+EXP_ST u32 exhaustive_execs = 0;
 EXP_ST u32 MX_ERU_counter = 0;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
@@ -162,7 +162,7 @@ EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
 static s32 shm_id;                    /* ID of the SHM region             */
-static s32 shm_sys_data;              /* ID of the MEM region (wcventure) */
+// static s32 shm_id_eru;                    /* ID of the SHM region             */
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
@@ -294,7 +294,7 @@ static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
                           *queue_top, /* Top of the list                  */
                           *q_prev100; /* Previous 100 marker              */
 
-static struct queue_entry ***top_rated;/* Top entries for bitmap bytes     */
+static struct queue_entry *top_rated[MAP_SIZE][2];/* Top entries for bitmap bytes     */
 
 struct extra_data {
   u8* data;                           /* Dictionary token data            */
@@ -938,7 +938,7 @@ static u32 nomralize_32(u32 n) {
   return 1<<(lg-1);
 }
 
-static inline u8 is_exhaustive() {
+static inline u32 agg_teru() {
   curr_teru = 0;
   u64* current = (u64*)trace_bits;
   u32* curreru = ERUs;
@@ -946,15 +946,24 @@ static inline u8 is_exhaustive() {
   u32 i = (MAP_SIZE >> 3);
   while(i--) {
     if (unlikely(*current)) {
-      for(u32 j=i<<3; j<(i<<3)+8; j++) {
-        curr_teru += *(curreru+j);
+      for(u32 j=0; j<8; j++) {
+        curr_teru += curreru[j];
       }
     }
     current ++;
     curreru += 8;
   }
 
-  return curr_teru >= (max_TERU>>1);
+  if(curr_teru > max_TERU) {
+    max_TERU = curr_teru;
+  }
+  
+  return curr_teru;
+} 
+
+static inline u8 is_exhaustive() {
+  exhaustive_execs ++;
+  return curr_teru > (max_TERU>>1);
 }
 
 /* Check if the current execution path brings anything new to the table.
@@ -1288,6 +1297,7 @@ static inline void classify_counts(u32* mem) {
 static void remove_shm(void) {
 
   shmctl(shm_id, IPC_RMID, NULL);
+  // shmctl(shm_id_eru, IPC_RMID, NULL);
 
 }
 
@@ -1327,7 +1337,6 @@ static void update_bitmap_score(struct queue_entry* q) {
 
   u32 i;
   u64 fav_factor = q->exec_us * q->len;
-
   /* For every byte set in trace_bits[], see if there is a previous winner,
      and how it compares to us. */
 
@@ -1336,7 +1345,6 @@ static void update_bitmap_score(struct queue_entry* q) {
     if (trace_bits[i]) {
 
       if (top_rated[i][0]) {
-
         /* Faster-executing or smaller test cases are favored. */
 
         if (fav_factor > top_rated[i][0]->exec_us * top_rated[i][0]->len) {
@@ -1347,7 +1355,6 @@ static void update_bitmap_score(struct queue_entry* q) {
           }
           q->nTERU = nomralize_32(q->TERU);
           top_rated[i][1] = q;
-          score_changed = 2;
           continue;
         }
 
@@ -1378,7 +1385,7 @@ static void update_bitmap_score(struct queue_entry* q) {
         minimize_bits(q->trace_mini, trace_bits);
       }
 
-      score_changed = 1;
+      score_changed |= 1;
 
     }
 
@@ -1468,7 +1475,7 @@ static void cull_queue(void) {
 EXP_ST void setup_shm(void) {
 
   u8* shm_str;
-  u8* mem_str;
+  // u8* shm_str_eru;
 
   if (!in_bitmap) {
     memset(virgin_bits, 255, MAP_SIZE);
@@ -1481,17 +1488,16 @@ EXP_ST void setup_shm(void) {
     map right after the regular bitmap.  */
   /* always allocate so that programs instrumented with afl-clang-fast
      don't cause segfaults */
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + MAP_SIZE*sizeof(ERUs[0]),
-   IPC_CREAT | IPC_EXCL | 0600);
-  shm_sys_data = shmget(IPC_PRIVATE, sizeof(struct sys_data), IPC_CREAT | IPC_EXCL | 0600);
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + 4*MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+  // shm_id_eru = shmget(IPC_PRIVATE, , IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
-  if (shm_sys_data < 0) PFATAL("shmget() failed");
+  // if (shm_id_eru < 0) PFATAL("shmget(ERU) failed");
 
   atexit(remove_shm);
 
   shm_str = alloc_printf("%d", shm_id);
-  mem_str = alloc_printf("%d", shm_sys_data);
+  // shm_str_eru = alloc_printf("%d", shm_id_eru);
 
   /* If somebody is asking us to fuzz instrumented binaries in dumb mode,
      we don't want them to detect instrumentation, since we won't be sending
@@ -1499,16 +1505,17 @@ EXP_ST void setup_shm(void) {
      later on, perhaps? */
 
   if (!dumb_mode) setenv(SHM_ENV_VAR, shm_str, 1);
-  if (!dumb_mode) setenv(MEM_ENV_VAR, mem_str, 1);
+  // if (!dumb_mode) setenv(ERU_ENV_VAR, shm_str_eru, 1);
 
   ck_free(shm_str);
+  // ck_free(shm_str_eru);
 
   trace_bits = shmat(shm_id, NULL, 0);
+  // ERUs = (u32*) shmat(shm_id_eru, NULL, 0);
 
   ERUs = (u32 *) (trace_bits + MAP_SIZE);
-
   
-  if (!trace_bits) PFATAL("shmat() failed");
+  if (!trace_bits || !ERUs) PFATAL("shmat() failed");
 
 }
 
@@ -2414,7 +2421,7 @@ static u8 run_target(char** argv, u32 timeout) {
      territory. */
 
   memset(trace_bits, 0, MAP_SIZE);
-  memset(ERUs, 0, MAP_SIZE * sizeof(ERUs[0]));
+  memset(ERUs, 0, MAP_SIZE * sizeof(u32));
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -2566,12 +2573,7 @@ static u8 run_target(char** argv, u32 timeout) {
   MEM_BARRIER();
 
   tb4 = *(u32*)trace_bits;
-  // SAYF("Checking ERUs:\n");
-  // for(int ii = 0 ; ii<MAP_SIZE; ii++) {
-  //   if(ERUs[ii]) {
-  //     SAYF("ERU[%d]==%d\n", ii, ERUs[ii]);
-  //   }
-  // }
+
   /* this should only bucket the MAP_SIZE part of shmem */
 #ifdef __x86_64__
   classify_counts((u64*)trace_bits);
@@ -2680,7 +2682,6 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
                          u32 handicap, u8 from_queue) {
 
   static u8 first_trace[MAP_SIZE];
-  static u32 first_trace_ERUs[MAP_SIZE];
 
   u8  fault = 0, new_bits = 0, var_detected = 0, hnb=0, exh=0,
       first_run = (q->exec_cksum == 0);
@@ -2712,9 +2713,8 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
   if (q->exec_cksum) {
     memcpy(first_trace, trace_bits, MAP_SIZE);
-    memcpy(first_trace_ERUs, ERUs, MAP_SIZE * sizeof(ERUs[0]));
-
     hnb = has_new_bits(virgin_bits);
+    agg_teru();
     exh = is_exhaustive();
 
     if (hnb > new_bits) new_bits = hnb;
@@ -2729,11 +2729,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     u32 cksum;
 
     if (!first_run && !(stage_cur % stats_update_freq)) show_stats();
-
     write_to_testcase(use_mem, q->len);
-
     fault = run_target(argv, use_tmout);
-
+    agg_teru();
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
 
@@ -2777,7 +2775,6 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
           variability will be detected in the regular checking */ 
 
         memcpy(first_trace, trace_bits, MAP_SIZE);
-        memcpy(first_trace_ERUs, ERUs, MAP_SIZE * sizeof(ERUs[0]));
 
       }
 
@@ -3302,8 +3299,12 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
        future fuzzing, etc. */
 
     hnb = has_new_bits(virgin_bits);
-    exh = is_exhaustive();
-    
+    agg_teru();
+    if(UR(1000)<3){
+      exh = is_exhaustive();
+      // exhaustive_execs += exh;
+    }
+
     if (!hnb && !exh) {
       if (crash_mode) total_crashes++;
       return 0;
@@ -4322,13 +4323,12 @@ static void show_stats(void) {
   }
 
   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
-  if(MX_ERU_counter < ERU_counters) {
-    MX_ERU_counter = ERU_counters;
+  if(MX_ERU_counter < exhaustive_execs) {
+    MX_ERU_counter = exhaustive_execs;
   }
-  sprintf(tmp, "%s -MX: %s", DI(ERU_counters),
-          DI(MX_ERU_counter));
+  sprintf(tmp, "%s", DI(queued_with_ERU));
 
-  SAYF("  new ERUs on : " cRST "%-22s " bSTG bV "\n", tmp);
+  SAYF("  Queued with ERU : " cRST "%-22s " bSTG bV "\n", tmp);
 
   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
@@ -4374,7 +4374,7 @@ static void show_stats(void) {
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d - %s", max_TERU, last_method);
+  sprintf(tmp, "%d - %d", max_TERU, curr_teru);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -4660,7 +4660,6 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
   static u8 tmp[64];
   static u8 clean_trace[MAP_SIZE];
-  static u32 clean_ERU[MAP_SIZE];
 
   u8  needs_write = 0, 
   fault = 0;
@@ -4765,7 +4764,6 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
     close(fd);
 
     memcpy(trace_bits, clean_trace, MAP_SIZE);
-    memcpy(ERUs, clean_ERU, MAP_SIZE*sizeof(ERUs[0]));
 
     update_bitmap_score(q);
 
@@ -8169,7 +8167,8 @@ int main(int argc, char** argv) {
   setup_post();
   setup_shm();
 
-  top_rated = ck_alloc(2 * MAP_SIZE * sizeof(struct queue_entry *));
+  // for(int ii = 0; ii<MAP_SIZE; ii++)
+  //   top_rated[ii] = ck_alloc(2 * sizeof(struct queue_entry *));
 
   init_count_class16();
 
@@ -8198,7 +8197,6 @@ int main(int argc, char** argv) {
     use_argv = argv + optind;
 
   perform_dry_run(use_argv);
-
   cull_queue();
 
   show_init_stats();
@@ -8222,7 +8220,7 @@ int main(int argc, char** argv) {
 
   while (1) {
 
-    ERU_counters = 0;
+    exhaustive_execs = 0;
     
     u8 skipped_fuzz;
 

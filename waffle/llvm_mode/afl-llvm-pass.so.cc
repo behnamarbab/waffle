@@ -201,11 +201,11 @@ bool WAFLCoverage::runOnModule(Module &M) {
   llvm::LLVMContext& context = M.getContext ();
   llvm::IRBuilder<> builder(context); 
 
-  std::vector<Type *> ERU_args(1, Type::getInt32Ty(context));
-  llvm::FunctionType *ERUIncrement =
-      llvm::FunctionType::get(builder.getVoidTy(), ERU_args, false);
-  llvm::Function *ERU_Increment =
-      llvm::Function::Create(ERUIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
+  // std::vector<Type *> ERU_args(1, Type::getInt32Ty(context));
+  // llvm::FunctionType *ERUIncrement =
+  //     llvm::FunctionType::get(builder.getVoidTy(), ERU_args, false);
+  // llvm::Function *ERU_Increment =
+  //     llvm::Function::Create(ERUIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
 
   GlobalVariable *AFLMapPtr =
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
@@ -273,27 +273,28 @@ bool WAFLCoverage::runOnModule(Module &M) {
           IRB.CreateStore(ConstantInt::get(Int32Ty, cur_loc >> 1), AFLPrevLoc);
       Store->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
-          //  ! ================================================================
-          i32  log_count = (i32) log2(CAV.Count);                           //!=
-          if(log_count<0)                                                   //!=
-            log_count = 0;                                                  //!=
-          //  ! ================================================================
-          LoadInst *ERUPtr = IRB.CreateLoad(AFLERUPtr);                     //!=
-          ERUPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-          Value *ERUBranchPtr = IRB.CreateGEP(ERUPtr, EdgeID);              //!=
-          //  ! ================================================================
-          Value *CNT = IRB.getInt32(log_count);                             //!=
-          
-          LoadInst *ERULoad = IRB.CreateLoad(ERUBranchPtr);                 //!=
-          Value *ERUIncr = IRB.CreateAdd(ERULoad, CNT);                     //!=
+      //  ! ================================================================
+      i32  log_count = (i32) log2(CAV.Count);                           //!=
+      if(log_count<0)                                                   //!=
+        log_count = 0;                                                  //!=
+      ConstantInt* CNT = ConstantInt::get(Int32Ty, log_count);          //!=
 
-          IRB.CreateStore(ERUIncr, ERUBranchPtr)
-              ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      //  ! ================================================================
+      LoadInst *ERUPtr = IRB.CreateLoad(AFLERUPtr);                     //!=
+      ERUPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+      Value *ERUPtrIdx = IRB.CreateGEP(ERUPtr, EdgeID);              //!=
+      //  ! ================================================================
+      
+      LoadInst *ERULoad = IRB.CreateLoad(ERUPtrIdx);                 //!=
+      Value *ERUIncr = IRB.CreateAdd(ERULoad, CNT);                     //!=
 
-          IRB.CreateCall(ERU_Increment, ArrayRef<Value*>({ CNT }));         //!=
-          //  ! ================================================================
-          total_lg_ERUs += log_count;                                       //!=
-          //  ! ================================================================
+      StoreInst *ERUSTORE = IRB.CreateStore(ERUIncr, ERUPtrIdx);
+      ERUSTORE->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
+      // IRB.CreateCall(ERU_Increment, ArrayRef<Value*>({ CNT }));         //!=
+      //  ! ================================================================
+      total_lg_ERUs += log_count;                                       //!=
+      //  ! ================================================================
 
       inst_blocks++;
     }
