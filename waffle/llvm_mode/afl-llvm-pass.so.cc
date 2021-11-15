@@ -178,7 +178,7 @@ bool WAFLCoverage::runOnModule(Module &M) {
 
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
-    SAYF(cCYA "MemLock-stack-fuzzer: afl-llvm-pass " cBRI VERSION cRST " by <wcventure@126.com>\n");
+    SAYF(cCYA "Waffle: wafl-llvm-pass " cBRI VERSION cRST " by <wcventure@126.com>\n");
 
   } else be_quiet = 1;
 
@@ -198,23 +198,22 @@ bool WAFLCoverage::runOnModule(Module &M) {
   /* Get globals for the SHM region and the previous location. Note that
      __afl_prev_loc is thread-local. */
 
-    /* 添加函数声明，插桩用途 */
   llvm::LLVMContext& context = M.getContext ();
   llvm::IRBuilder<> builder(context); 
 
-  std::vector<Type *> ORC_args(1, Type::getInt32Ty(context));
-  llvm::FunctionType *ORCIncrement =
-      llvm::FunctionType::get(builder.getVoidTy(), ORC_args, false);
-  llvm::Function *ORC_Increment =
-      llvm::Function::Create(ORCIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
+  std::vector<Type *> ERU_args(1, Type::getInt32Ty(context));
+  llvm::FunctionType *ERUIncrement =
+      llvm::FunctionType::get(builder.getVoidTy(), ERU_args, false);
+  llvm::Function *ERU_Increment =
+      llvm::Function::Create(ERUIncrement, llvm::Function::ExternalLinkage, "instr_AddInsts", &M);
 
   GlobalVariable *AFLMapPtr =
       new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_area_ptr");
 
-  GlobalVariable *AFLORCPtr =
+  GlobalVariable *AFLERUPtr =
       new GlobalVariable(M, PointerType::get(Int32Ty, 0), false,
-                         GlobalValue::ExternalLinkage, 0, "__afl_ORC_ptr");
+                         GlobalValue::ExternalLinkage, 0, "__afl_ERU_ptr");
 
   GlobalVariable *AFLPrevLoc = new GlobalVariable(
       M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
@@ -223,7 +222,7 @@ bool WAFLCoverage::runOnModule(Module &M) {
   /* Instrument all the things! */
 
   int inst_blocks = 0;
-  int total_lg_ORCs = 0;
+  int total_lg_ERUs = 0;
 
   for (auto &F : M) {
 
@@ -279,21 +278,21 @@ bool WAFLCoverage::runOnModule(Module &M) {
           if(log_count<0)                                                   //!=
             log_count = 0;                                                  //!=
           //  ! ================================================================
-          LoadInst *ORCPtr = IRB.CreateLoad(AFLORCPtr);                     //!=
-          ORCPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-          Value *ORCBranchPtr = IRB.CreateGEP(ORCPtr, EdgeID);              //!=
+          LoadInst *ERUPtr = IRB.CreateLoad(AFLERUPtr);                     //!=
+          ERUPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *ERUBranchPtr = IRB.CreateGEP(ERUPtr, EdgeID);              //!=
           //  ! ================================================================
           Value *CNT = IRB.getInt32(log_count);                             //!=
           
-          LoadInst *ORCLoad = IRB.CreateLoad(ORCBranchPtr);                 //!=
-          Value *ORCIncr = IRB.CreateAdd(ORCLoad, CNT);                     //!=
+          LoadInst *ERULoad = IRB.CreateLoad(ERUBranchPtr);                 //!=
+          Value *ERUIncr = IRB.CreateAdd(ERULoad, CNT);                     //!=
 
-          IRB.CreateStore(ORCIncr, ORCBranchPtr)
+          IRB.CreateStore(ERUIncr, ERUBranchPtr)
               ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
-          IRB.CreateCall(ORC_Increment, ArrayRef<Value*>({ CNT }));         //!=
+          IRB.CreateCall(ERU_Increment, ArrayRef<Value*>({ CNT }));         //!=
           //  ! ================================================================
-          total_lg_ORCs += log_count;                                       //!=
+          total_lg_ERUs += log_count;                                       //!=
           //  ! ================================================================
 
       inst_blocks++;
@@ -309,7 +308,7 @@ bool WAFLCoverage::runOnModule(Module &M) {
     else OKF("Instrumented %u locations (%s mode, ratio %u%%).\n    Total: %d",
              inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
              ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
-              "ASAN/MSAN" : "non-hardened"), inst_ratio, total_lg_ORCs);
+              "ASAN/MSAN" : "non-hardened"), inst_ratio, total_lg_ERUs);
 
   }
 

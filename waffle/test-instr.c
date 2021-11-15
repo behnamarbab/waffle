@@ -18,16 +18,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-int tmp = 0;
-
-int temp(int x) {
-  tmp++;
-  if(x==0xFF){
-    return 1;
-  }
-  return 0;
-}
-
 int main(int argc, char** argv) {
   printf("Starting the new test...\n");
   char buf[8];
@@ -36,11 +26,6 @@ int main(int argc, char** argv) {
     printf("Hum?\n");
     exit(1);
   }
-
-  for(int i =0; i<buf[0]+buf[1]; i++)
-    temp(0xFF);
-
-  printf("%d\n", tmp);
 
   if (buf[0] == '0')
     printf("Looks like a zero to me!\n");

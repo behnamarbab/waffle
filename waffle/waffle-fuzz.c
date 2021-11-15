@@ -150,9 +150,10 @@ static s32 forksrv_pid,               /* PID of the fork server           */
 
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
-EXP_ST u32* ORCs;                     /* ORC - SHM with 2nd variable     */
-EXP_ST u32 elite_ORCs[MAP_SIZE];                /*   */
+EXP_ST u32* ERUs;                     /* ERU - SHM with 2nd variable     */
 
+EXP_ST u32 ERU_counters = 0;
+EXP_ST u32 MX_ERU_counter = 0;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -173,8 +174,9 @@ EXP_ST u32 queued_paths,              /* Total number of queued testcases */
            queued_discovered,         /* Items discovered during this run */
            queued_imported,           /* Items imported via -S            */
            queued_favored,            /* Paths deemed favorable           */
+           queued_ERU_favored,        /* Paths deemed favorable with ERU  */
            queued_with_cov,           /* Paths with new coverage bytes    */
-           queued_with_ORC,          /* Paths with new max_ORC dwords   */
+           queued_with_ERU,          /* Paths with new max_ERU dwords   */
            pending_not_fuzzed,        /* Queued but not done yet          */
            pending_favored,           /* Pending favored paths            */
            cur_skipped_paths,         /* Abandoned inputs in cur cycle    */
@@ -254,7 +256,7 @@ struct queue_entry {
       was_fuzzed,                     /* Had any fuzzing done yet?        */
       passed_det,                     /* Deterministic stages passed?     */
       has_new_cov,                    /* Triggers new coverage?           */
-      has_new_ORC,                    /* Triggers a higher ORC?           */
+      exhaustive,
       var_behavior,                   /* Variable behavior?               */
       favored,                        /* Currently favored?               */
       fs_redundant;                   /* Marked as redundant in the fs?   */
@@ -268,31 +270,22 @@ struct queue_entry {
 
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
+  u32 counter_mini;                   /* Trace the counters               */
 
-  u32 TORC;                           /* Total ORC                        */
-  u32 elite_ORC;                      /* Elite ORC                        */
-  u32 elite_index;                    /* Elite index                      */
-
+  u32 TERU;                           /* Total ERU                        */
+  u8  nTERU;                          /* normalize(TERU)                  */
+  // ! You need to remove the following 
+  
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
 
 };
 
-EXP_ST const float EPS = 0.000001;
 
-EXP_ST i64 TORC = 0;
-EXP_ST i32 max_TORC = 0;
-EXP_ST i32 TORC_cur = 0;
-// EXP_ST u32 max_elite_ORC = 0;
-EXP_ST float max_ORC_ratio = 1;
-EXP_ST u32 elite_index = -1;
-EXP_ST u32 ORC_elite = -1;
+EXP_ST u64 TERU = 0;
+EXP_ST u32 max_TERU = 0;
+EXP_ST u32 curr_teru = 0;
 EXP_ST u8* last_method;
-
-EXP_ST void clean_elite_tracers() {
-  max_ORC_ratio = 1.0;
-  elite_index = -1;
-}
 
 
 static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
@@ -301,7 +294,7 @@ static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
                           *queue_top, /* Top of the list                  */
                           *q_prev100; /* Previous 100 marker              */
 
-static struct queue_entry **top_rated;/* Top entries for bitmap bytes     */
+static struct queue_entry ***top_rated;/* Top entries for bitmap bytes     */
 
 struct extra_data {
   u8* data;                           /* Dictionary token data            */
@@ -377,17 +370,9 @@ static inline u32 UR(u32 limit);
 
 struct sys_data
 {
-  int TORC;
+  int TERU;
 };
 
-struct sys_data* mem_data;                /* SHM (wcventure) - behnamarbab  */
-
-void ReadTORC(){
-  TORC_cur = mem_data->TORC;
-  if(TORC_cur > max_TORC) {
-    max_TORC = TORC_cur;
-  }
-}
 
 void DEBUG (char const *fmt, ...) {
     static FILE *f = NULL;
@@ -851,7 +836,6 @@ static void mark_as_redundant(struct queue_entry* q, u8 state) {
 
 }
 
-
 /* Append new test case to the queue. */
 
 static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
@@ -862,8 +846,6 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
-  // q->TORC         = TORC_cur;
-  // q->elite_ORC    = 0;
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -950,37 +932,29 @@ EXP_ST void read_bitmap(u8* fname) {
 
 }
 
-static u8 update_possible_elite(int index) {
+static u32 nomralize_32(u32 n) {
+  u32 lg = 0;
+  for(; n>0; n>>=1, lg++);
+  return 1<<(lg-1);
+}
 
-  if(elite_ORCs[index]){
-    
-    float oratio = (float)ORCs[index] / elite_ORCs[index];
+static inline u8 is_exhaustive() {
+  curr_teru = 0;
+  u64* current = (u64*)trace_bits;
+  u32* curreru = ERUs;
 
-    if(elite_ORCs[index] < ORCs[index] && oratio > MULT_TRESH) {
-      elite_ORCs[index] = ORCs[index];
+  u32 i = (MAP_SIZE >> 3);
+  while(i--) {
+    if (unlikely(*current)) {
+      for(u32 j=i<<3; j<(i<<3)+8; j++) {
+        curr_teru += *(curreru+j);
+      }
     }
-
-    /* a higher oratio is found */
-    if (max_ORC_ratio + EPS < oratio) {
-      max_ORC_ratio = oratio;
-      elite_index = index;
-      ORC_elite = ORCs[index];
-      
-      return 1;
-    }
-  }
-  else {
-    elite_ORCs[index] = ORCs[index];
-    
-    if (elite_index == -1) {
-      elite_index = index;
-      ORC_elite = ORCs[index];
-
-      return 1;
-    }
+    current ++;
+    curreru += 8;
   }
 
-  return 0;
+  return curr_teru >= (max_TERU>>1);
 }
 
 /* Check if the current execution path brings anything new to the table.
@@ -991,13 +965,12 @@ static u8 update_possible_elite(int index) {
    This function is called after every exec() on a fairly large buffer, so
    it needs to be fast. We do this in 32-bit and 64-bit flavors. */
 
-static inline u8 has_anything_new(u8* virgin_map) {
+static inline u8 has_new_bits(u8* virgin_map) {
 
 #ifdef __x86_64__
 
   u64* current = (u64*)trace_bits;
   u64* virgin  = (u64*)virgin_map;
-  clean_elite_tracers();
 
   u32  i = (MAP_SIZE >> 3);
 
@@ -1010,8 +983,7 @@ static inline u8 has_anything_new(u8* virgin_map) {
 
 #endif /* ^__x86_64__ */
 
-  u8         ret = 0;
-  u8 elite_found = 0;
+  u8   ret = 0;
 
   while (i--) {
 
@@ -1019,44 +991,35 @@ static inline u8 has_anything_new(u8* virgin_map) {
        that have not been already cleared from the virgin map - since this will
        almost always be the case. */
 
-    if (unlikely(*current)) {
-      int I = (i<<3);
-      for(int index = I; index<I+8; index++) {
-        if(ORCs[i])
-          if(update_possible_elite(index)) {
-            elite_found = 1;
-          }
+    if (unlikely(*current) && unlikely(*current & *virgin)) {
+
+      if (likely(ret < 2)) {
+
+        u8* cur = (u8*)current;
+        u8* vir = (u8*)virgin;
+
+        /* Looks like we have not found any new bytes yet; see if any non-zero
+           bytes in current[] are pristine in virgin[]. */
+
+#ifdef __x86_64__
+
+        if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+            (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
+            (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
+            (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff)) ret = 2;
+        else ret = 1;
+
+#else
+
+        if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+            (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff)) ret = 2;
+        else ret = 1;
+
+#endif /* ^__x86_64__ */
+
       }
-      if(unlikely(*current & *virgin)) {
-        
-        if (likely(ret < 2)) {
-
-          u8* cur = (u8*)current;
-          u8* vir = (u8*)virgin;
-
-          /* Looks like we have not found any new bytes yet; see if any non-zero
-            bytes in current[] are pristine in virgin[]. */
-
-  #ifdef __x86_64__
-
-          if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
-              (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
-              (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
-              (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff)) ret = 2;
-          else ret = 1;
-
-  #else
-
-          if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
-              (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff)) ret = 2;
-          else ret = 1;
-
-  #endif /* ^__x86_64__ */
-
-        }
 
       *virgin &= ~*current;
-      }
 
     }
 
@@ -1067,7 +1030,7 @@ static inline u8 has_anything_new(u8* virgin_map) {
 
   if (ret && virgin_map == virgin_bits) bitmap_changed = 1;
 
-  return ret | (elite_found << 2);
+  return ret;
 
 }
 
@@ -1372,38 +1335,52 @@ static void update_bitmap_score(struct queue_entry* q) {
 
     if (trace_bits[i]) {
 
-       if (top_rated[i]) {
+      if (top_rated[i][0]) {
 
-         /* Faster-executing or smaller test cases are favored. */
+        /* Faster-executing or smaller test cases are favored. */
 
-         if (top_rated[i]->elite_index == i) {
+        if (fav_factor > top_rated[i][0]->exec_us * top_rated[i][0]->len) {
+          if(top_rated[i][1]) {
+            if(!var_bytes[i] || top_rated[i][1]->TERU >= q->TERU) {
+              continue;
+            }
+          }
+          q->nTERU = nomralize_32(q->TERU);
+          top_rated[i][1] = q;
+          score_changed = 2;
+          continue;
+        }
 
-         }
-         else if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
+        if(var_bytes[i]) {
+          if(!q->counter_mini) {
+            q->counter_mini = 0;
+          }
+        }
 
-         /* Looks like we're going to win. Decrease ref count for the
-            previous winner, discard its trace_bits[] if necessary. */
+        /* Looks like we're going to win. Decrease ref count for the
+          previous winner, discard its trace_bits[] if necessary. */
 
-         if (!--top_rated[i]->tc_ref) {
-           ck_free(top_rated[i]->trace_mini);
-           top_rated[i]->trace_mini = 0;
-         }
+        if (!--top_rated[i][0]->tc_ref) {
+          ck_free(top_rated[i][0]->trace_mini);
+          top_rated[i][0]->trace_mini = 0;
+        }
 
-       }
+      }
 
-       /* Insert ourselves as the new winner. */
+      /* Insert ourselves as the new winner. */
 
-       top_rated[i] = q;
-       q->tc_ref++;
+      top_rated[i][0] = q;
+      q->tc_ref++;
 
-       if (!q->trace_mini) {
-         q->trace_mini = ck_alloc(MAP_SIZE >> 3);
-         minimize_bits(q->trace_mini, trace_bits);
-       }
 
-       score_changed = 1;
+      if (!q->trace_mini) {
+        q->trace_mini = ck_alloc(MAP_SIZE >> 3);
+        minimize_bits(q->trace_mini, trace_bits);
+      }
 
-     }
+      score_changed = 1;
+
+    }
 
 }
 
@@ -1411,13 +1388,13 @@ static void update_bitmap_score(struct queue_entry* q) {
    goes over top_rated[] entries, and then sequentially grabs winners for
    previously-unseen bytes (temp_v) and marks them as favored, at least
    until the next run. The favored entries are given more air time during
-   all fuzzing steps. 
-   In the each method_stage setting we favor entries which achieve the max of their goal.*/
+   all fuzzing steps. */
 
 static void cull_queue(void) {
 
-  struct queue_entry* q;
+  struct queue_entry* q, *tmpq;
   static u8 temp_v[MAP_SIZE >> 3];
+  static u8 temp_vv[MAP_SIZE];
   u32 i;
 
   if (dumb_mode || !score_changed) return;
@@ -1425,8 +1402,10 @@ static void cull_queue(void) {
   score_changed = 0;
 
   memset(temp_v, 255, MAP_SIZE >> 3);
+  memcpy(temp_vv, var_bytes, MAP_SIZE);
 
   queued_favored  = 0;
+  queued_ERU_favored = 0;
   pending_favored = 0;
 
   q = queue;
@@ -1437,26 +1416,46 @@ static void cull_queue(void) {
   }
 
   for (i = 0; i < MAP_SIZE; i++)
-    if (top_rated[i] && (temp_v[i >> 3] & (1 << (i & 7)))) {
+    if (top_rated[i][0] && (temp_v[i >> 3] & (1 << (i & 7)))) {
 
       u32 j = MAP_SIZE >> 3;
 
       /* Remove all bits belonging to the current entry from temp_v. */
 
       while (j--) 
-        if (top_rated[i]->trace_mini[j])
-          temp_v[j] &= ~top_rated[i]->trace_mini[j];
+        if (top_rated[i][0]->trace_mini[j])
+          temp_v[j] &= ~top_rated[i][0]->trace_mini[j];
 
-      top_rated[i]->favored = 1;
+      top_rated[i][0]->favored = 1;
       queued_favored++;
 
-      if (!top_rated[i]->was_fuzzed) pending_favored++;
+      if (!top_rated[i][0]->was_fuzzed) pending_favored++;
 
+    }
+    else if(top_rated[i][1] && temp_vv[i]) {
+      u32 j = MAP_SIZE;
+
+      /* Remove all bits belonging to the current entry from temp_v. */
+
+      while (j--)
+        if(var_bytes[j] && top_rated[j][1])
+          if(top_rated[i][1]->nTERU == top_rated[j][1]->nTERU)
+            temp_vv[j] = 0;
+
+      top_rated[i][1]->favored = 2;
+      queued_ERU_favored++;
     }
 
   q = queue;
+  tmpq = q;
 
   while (q) {
+    if(q->favored==2 && q->nTERU >= tmpq->nTERU) {
+      tmpq->favored = 0;
+      q->favored = 1;
+      tmpq = q;
+    }
+
     mark_as_redundant(q, !q->favored);
     q = q->next;
   }
@@ -1473,7 +1472,6 @@ EXP_ST void setup_shm(void) {
 
   if (!in_bitmap) {
     memset(virgin_bits, 255, MAP_SIZE);
-    memset(elite_ORCs, 0, MAP_SIZE * sizeof(elite_ORCs[0]));
   }
 
   memset(virgin_tmout, 255, MAP_SIZE);
@@ -1483,7 +1481,7 @@ EXP_ST void setup_shm(void) {
     map right after the regular bitmap.  */
   /* always allocate so that programs instrumented with afl-clang-fast
      don't cause segfaults */
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + MAP_SIZE*sizeof(ORCs[0]),
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + MAP_SIZE*sizeof(ERUs[0]),
    IPC_CREAT | IPC_EXCL | 0600);
   shm_sys_data = shmget(IPC_PRIVATE, sizeof(struct sys_data), IPC_CREAT | IPC_EXCL | 0600);
 
@@ -1506,21 +1504,13 @@ EXP_ST void setup_shm(void) {
   ck_free(shm_str);
 
   trace_bits = shmat(shm_id, NULL, 0);
-  mem_data = shmat(shm_sys_data, NULL, 0);
 
-  ORCs = (u32 *) (trace_bits + MAP_SIZE);
+  ERUs = (u32 *) (trace_bits + MAP_SIZE);
 
   
   if (!trace_bits) PFATAL("shmat() failed");
-  if (!mem_data) PFATAL("shmat() failed");
 
 }
-
-/* set the elite map to 0 */
-EXP_ST void setup_elites() {
-  memset(elite_ORCs, 0, MAP_SIZE * sizeof(elite_ORCs[0]));
-}
-
 
 /* Load postprocessor, if available. */
 
@@ -2406,47 +2396,6 @@ EXP_ST void init_forkserver(char** argv) {
 
 }
 
-// static u8 find_elite(struct queue_entry* q) {
-//   u32 max_elite_ORC = 0;
-//   float max_ORC_ratio = 1;
-//   const float EPS = 0.000001;
-//   u32 elite_index = -1;
-
-//   for (i = 0; i < MAP_SIZE; i++){
-//     if(elite_ORCs[i]){
-//       float oratio = (float)ORCs[i] / elite_ORCs[i];
-//       /* oratio == max_ORC_ratio */
-//       if (max_ORC_ratio - EPS <= oratio && oratio >= max_ORC_ratio + EPS) {
-//         if (max_elite_ORC < ORCs[i]) {
-//           max_elite_ORC = ORCs[i];
-//           elite_index = i;
-//         }
-//       }
-//       /* a higher oratio is found */
-//       else if (oratio > max_ORC_ratio + EPS) {
-//         max_ORC_ratio = oratio;
-//         elite_index = i;
-//       }
-//     } else
-//     /* Yet the untracked ORCCs may become the elite. 10% chance */
-//     if (max_elite_ORC && R(100)>10) continue;
-
-//     else if (max_elite_ORC < ORCs[i]) {
-//       max_elite_ORC = ORCs[i];
-//       elite_index = i;
-//     }
-//   }
-
-//   q->elite_index = elite_index;
-
-//   if(elite_index<0)
-//     return 0;
-
-//   q->elite_ORC = ORCs[elite_index];
-//   return 1;
-// }
-
-
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
 
@@ -2465,7 +2414,7 @@ static u8 run_target(char** argv, u32 timeout) {
      territory. */
 
   memset(trace_bits, 0, MAP_SIZE);
-  memset(ORCs, 0, MAP_SIZE * sizeof(ORCs[0]));
+  memset(ERUs, 0, MAP_SIZE * sizeof(ERUs[0]));
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -2617,6 +2566,12 @@ static u8 run_target(char** argv, u32 timeout) {
   MEM_BARRIER();
 
   tb4 = *(u32*)trace_bits;
+  // SAYF("Checking ERUs:\n");
+  // for(int ii = 0 ; ii<MAP_SIZE; ii++) {
+  //   if(ERUs[ii]) {
+  //     SAYF("ERU[%d]==%d\n", ii, ERUs[ii]);
+  //   }
+  // }
   /* this should only bucket the MAP_SIZE part of shmem */
 #ifdef __x86_64__
   classify_counts((u64*)trace_bits);
@@ -2625,7 +2580,6 @@ static u8 run_target(char** argv, u32 timeout) {
 #endif /* ^__x86_64__ */
 
   prev_timed_out = child_timed_out;
-  
 
   /* Report outcome to caller. */
 
@@ -2726,8 +2680,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
                          u32 handicap, u8 from_queue) {
 
   static u8 first_trace[MAP_SIZE];
+  static u32 first_trace_ERUs[MAP_SIZE];
 
-  u8  fault = 0, has_news = 0, var_detected = 0, han=0,
+  u8  fault = 0, new_bits = 0, var_detected = 0, hnb=0, exh=0,
       first_run = (q->exec_cksum == 0);
 
   u64 start_us, stop_us;
@@ -2757,8 +2712,14 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
   if (q->exec_cksum) {
     memcpy(first_trace, trace_bits, MAP_SIZE);
-    han = has_anything_new(virgin_bits);
-    if (han > has_news) has_news = han;
+    memcpy(first_trace_ERUs, ERUs, MAP_SIZE * sizeof(ERUs[0]));
+
+    hnb = has_new_bits(virgin_bits);
+    exh = is_exhaustive();
+
+    if (hnb > new_bits) new_bits = hnb;
+    else if(exh) new_bits = 3;
+
   }
 
   start_us = get_cur_time_us();
@@ -2775,8 +2736,6 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
-    
-    ReadTORC();
 
     if (stop_soon || fault != crash_mode) goto abort_calibration;
 
@@ -2789,10 +2748,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
     if (q->exec_cksum != cksum) {
 
-      han = has_anything_new(virgin_bits);
+      hnb = has_new_bits(virgin_bits);
 
-      // New coverage? else, new elite?
-      if (han > has_news) has_news = han;
+      if (hnb > new_bits) new_bits = hnb;
 
       if (q->exec_cksum) {
 
@@ -2803,6 +2761,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
           if (!var_bytes[i] && first_trace[i] != trace_bits[i]) {
 
             var_bytes[i] = 1;
+            // TODO: increase CAL_CYCLES_LONG to a higher value? or keep it?
             stage_max    = CAL_CYCLES_LONG;
 
           }
@@ -2818,6 +2777,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
           variability will be detected in the regular checking */ 
 
         memcpy(first_trace, trace_bits, MAP_SIZE);
+        memcpy(first_trace_ERUs, ERUs, MAP_SIZE * sizeof(ERUs[0]));
 
       }
 
@@ -2838,13 +2798,11 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->handicap    = handicap;
   q->cal_failed  = 0;
 
-  q->TORC = (i32) TORC_cur;
-  q->elite_index = elite_index;
-  q->elite_ORC = ORC_elite;
+  q->TERU = (u32) curr_teru;
 
   total_bitmap_size += q->bitmap_size;
   total_bitmap_entries++;
-  TORC += q->TORC;
+  TERU += q->TERU;
 
   update_bitmap_score(q);
 
@@ -2852,18 +2810,18 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
      parent. This is a non-critical problem, but something to warn the user
      about. */
 
-  if (!dumb_mode && first_run && !fault && !has_news) fault = FAULT_NOBITS;
+  if (!dumb_mode && first_run && !fault && !new_bits && !exh) fault = FAULT_NOBITS;
 
 abort_calibration:
 
-  if ( (has_news & 2) && !q->has_new_cov) {
+  if (new_bits == 2 && !q->has_new_cov) {
     q->has_new_cov = 1;
     queued_with_cov++;
   }
 
-  if (has_news & 4) {
-    q->has_new_ORC = 1;
-    if(han ^ 2) queued_with_ORC++;
+  if (exh && !q->exhaustive) {
+    q->exhaustive = 1;
+    queued_with_ERU++;
   }
 
   /* Mark variable paths. */
@@ -2942,8 +2900,8 @@ static void perform_dry_run(char** argv) {
     if (stop_soon) return;
 
     if (res == crash_mode || res == FAULT_NOBITS)
-      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us, TORC = %d\n" cRST, 
-           q->len, q->bitmap_size, q->exec_us, q->TORC);
+      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us, TERU = %d\n" cRST, 
+           q->len, q->bitmap_size, q->exec_us, q->TERU);
 
     switch (res) {
 
@@ -3239,7 +3197,7 @@ static void pivot_inputs(void) {
 /* Construct a file name for a new test case, capturing the operation
    that led to its discovery. Uses a static buffer. */
 
-static u8* describe_op(u8 han) {
+static u8* describe_op(u8 hnb) {
 
   static u8 ret[256];
 
@@ -3269,8 +3227,8 @@ static u8* describe_op(u8 han) {
 
   }
 
-  if (han & 2) strcat(ret, ",+cov");
-  if (han & 4) strcat(ret, ",+orc");
+  if (hnb & 2) strcat(ret, ",+cov");
+  else if (hnb & 4) strcat(ret, ",+eru");
 
   return ret;
 
@@ -3333,8 +3291,8 @@ static void write_crash_readme(void) {
 static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
   u8  *fn = "";
-  u8  han = 0;
-  u8  hnm_ORC = 0;
+  u8  hnb = 0;
+  u8  exh = 0;
   s32 fd;
   u8  keeping = 0, res;
   
@@ -3343,19 +3301,19 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
-    han = has_anything_new(virgin_bits);
-    // !                Has elite can be called prior to the calibration
-
-    if (!han) {
+    hnb = has_new_bits(virgin_bits);
+    exh = is_exhaustive();
+    
+    if (!hnb && !exh) {
       if (crash_mode) total_crashes++;
       return 0;
-    }    
+    }
    
 
 #ifndef SIMPLE_FILES
 
-    fn = alloc_printf("%s/queue/id:%06u,%s%s", out_dir, queued_paths,
-                      describe_op(han), hnm_ORC ? ",+ORC": "");
+    fn = alloc_printf("%s/queue/id:%06u,%s", out_dir, queued_paths,
+                      describe_op(hnb+(exh<<2)));
 
 #else
 
@@ -3365,18 +3323,17 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   
   add_to_queue(fn, len, 0);
 
-  if (han & 2) {
+  if (hnb == 2) {
     queue_top->has_new_cov = 1;
     queued_with_cov++;
   }
 
-  if (han & 4) {
-    queue_top->has_new_ORC = 1;
-    if(han ^ 2) queued_with_ORC++;
+  else if (exh) {
+    queued_with_ERU++;
+    queue_top->exhaustive = 1;
   }
 
   queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);    
-  // queue_top->ORC_cksum = hash32(ORCs, MAP_SIZE*sizeof(ORCs[0]), HASH_CONST); 
 
   /* Try to calibrate inline; this also calls update_bitmap_score() when
       successful. */
@@ -3416,7 +3373,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         simplify_trace((u32*)trace_bits);
 #endif /* ^__x86_64__ */
 
-        if (!has_anything_new(virgin_tmout)) return keeping;
+        if (!has_new_bits(virgin_tmout)) return keeping;
 
       }
 
@@ -3431,7 +3388,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         u8 new_fault;
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
-        ReadTORC();
 
         /* A corner case that one user reported bumping into: increasing the
            timeout actually uncovers a crash. Make sure we don't discard it if
@@ -3481,7 +3437,7 @@ keep_as_crash:
         simplify_trace((u32*)trace_bits);
 #endif /* ^__x86_64__ */
 
-        if (!has_anything_new(virgin_crash)) return keeping;
+        if (!has_new_bits(virgin_crash)) return keeping;
 
       }
 
@@ -4366,11 +4322,13 @@ static void show_stats(void) {
   }
 
   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
+  if(MX_ERU_counter < ERU_counters) {
+    MX_ERU_counter = ERU_counters;
+  }
+  sprintf(tmp, "%s -MX: %s", DI(ERU_counters),
+          DI(MX_ERU_counter));
 
-  sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_ORC),
-          ((double)queued_with_ORC) * 100 / queued_paths);
-
-  SAYF("  new ORCs on : " cRST "%-22s " bSTG bV "\n", tmp);
+  SAYF("  new ERUs on : " cRST "%-22s " bSTG bV "\n", tmp);
 
   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
@@ -4416,7 +4374,7 @@ static void show_stats(void) {
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d - %s", max_TORC, last_method);
+  sprintf(tmp, "%d - %s", max_TERU, last_method);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -4702,7 +4660,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
   static u8 tmp[64];
   static u8 clean_trace[MAP_SIZE];
-  static u32 clean_ORC[MAP_SIZE];
+  static u32 clean_ERU[MAP_SIZE];
 
   u8  needs_write = 0, 
   fault = 0;
@@ -4741,20 +4699,16 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
       u32 trim_avail = MIN(remove_len, q->len - remove_pos);
       u32 exec_cksum;
-      // u32 ORC_cksum;
 
       write_with_gap(in_buf, q->len, remove_pos, trim_avail);
 
       fault = run_target(argv, exec_tmout);
       trim_execs++;
-      ReadTORC();
 
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
 
       /* Note that we don't keep track of crashes or hangs here; maybe TODO? */
-      // ORC_cksum = hash32(ORCs, MAP_SIZE*sizeof(ORCs[0]), HASH_CONST);
       exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-
 
       /* If the deletion had no impact on the trace, make it permanent. This
          isn't perfect for variable-path inputs, but we're just making a
@@ -4778,7 +4732,6 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
 
           needs_write = 1;
           memcpy(clean_trace, trace_bits, MAP_SIZE);
-          memcpy(clean_ORC, ORCs, MAP_SIZE*sizeof(clean_ORC[0]));
 
         }
 
@@ -4812,7 +4765,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
     close(fd);
 
     memcpy(trace_bits, clean_trace, MAP_SIZE);
-    memcpy(ORCs, clean_ORC, MAP_SIZE*sizeof(ORCs[0]));
+    memcpy(ERUs, clean_ERU, MAP_SIZE*sizeof(ERUs[0]));
 
     update_bitmap_score(q);
 
@@ -4844,7 +4797,6 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
 
   fault = run_target(argv, exec_tmout);
-  ReadTORC();
 
   if (stop_soon) return 1;
 
@@ -6974,7 +6926,6 @@ static void sync_fuzzers(char** argv) {
         write_to_testcase(mem, st.st_size);
 
         fault = run_target(argv, exec_tmout);
-        ReadTORC();
 
         if (stop_soon) return;
 
@@ -8217,11 +8168,8 @@ int main(int argc, char** argv) {
 
   setup_post();
   setup_shm();
-  setup_elites();
 
-  // ! Make it work
-  top_rated = ck_alloc(MAP_SIZE * sizeof(struct queue_entry *));
-  // top_rated = ck_alloc(MAP_SIZE * sizeof(struct queue_entry *));
+  top_rated = ck_alloc(2 * MAP_SIZE * sizeof(struct queue_entry *));
 
   init_count_class16();
 
@@ -8272,13 +8220,10 @@ int main(int argc, char** argv) {
 
   queue_pre = NULL;
 
-  u8 stages[] = {METH_WFL, METH_AFL, METH_MEM};
-
   while (1) {
-    // u64 cur_time = get_cur_time();
-    // u8 stage_index = (cur_time / (1000 * 3) % sizeof(stages));
-    method_stage = stages[0];
 
+    ERU_counters = 0;
+    
     u8 skipped_fuzz;
 
     cull_queue();

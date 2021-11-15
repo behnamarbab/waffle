@@ -53,8 +53,8 @@ u8  __afl_area_initial[MAP_SIZE];
 u8* __afl_area_ptr = __afl_area_initial;
 
 /* Similarly we have a map for instruction counters */
-i32  __afl_ORC_initial[MAP_SIZE];
-i32* __afl_ORC_ptr = __afl_ORC_initial;
+i32  __afl_ERU_initial[MAP_SIZE];
+i32* __afl_ERU_ptr = __afl_ERU_initial;
 
 /* These are saved previous location IDs and strings */
 __thread u32 __afl_prev_loc;
@@ -92,8 +92,8 @@ static void __afl_map_shm(void) {
 
     __afl_area_ptr[0] = 1;
 
-    /* Set ORC pointer to be just after the trace bits map*/
-    __afl_ORC_ptr = (i32*) &__afl_area_ptr[MAP_SIZE];
+    /* Set ERU pointer to be just after the trace bits map*/
+    __afl_ERU_ptr = (i32*) &__afl_area_ptr[MAP_SIZE];
 
   }
 
@@ -204,7 +204,7 @@ int __afl_persistent_loop(unsigned int max_cnt) {
     if (is_persistent) {
 
       memset(__afl_area_ptr, 0, MAP_SIZE);
-      memset(__afl_ORC_ptr, 0, MAP_SIZE * sizeof(i32));
+      memset(__afl_ERU_ptr, 0, MAP_SIZE * sizeof(i32));
       __afl_area_ptr[0] = 1;
       __afl_prev_loc = 0;
     }
