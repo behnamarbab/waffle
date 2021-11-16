@@ -154,6 +154,7 @@ EXP_ST u32* ERUs;                     /* ERU - SHM with 2nd variable     */
 
 EXP_ST u32 exhaustive_execs = 0;
 EXP_ST u32 MX_ERU_counter = 0;
+EXP_ST u32 exhaustion_thresh = MIN_EXHAUSTIVENESS;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -956,14 +957,20 @@ static inline u32 agg_teru() {
 
   if(curr_teru > max_TERU) {
     max_TERU = curr_teru;
+    return 1;
   }
-  
-  return curr_teru;
+
+  return 0;  
 } 
 
 static inline u8 is_exhaustive() {
-  exhaustive_execs ++;
-  return curr_teru > (max_TERU>>1);
+  u8 exh = 0;
+  if(curr_teru > max_TERU) {
+    exh = 1;
+    max_TERU = curr_teru;
+    exhaustive_execs ++;
+  }
+  return exh;
 }
 
 /* Check if the current execution path brings anything new to the table.
@@ -2714,8 +2721,8 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   if (q->exec_cksum) {
     memcpy(first_trace, trace_bits, MAP_SIZE);
     hnb = has_new_bits(virgin_bits);
-    agg_teru();
-    exh = is_exhaustive();
+    exh = agg_teru();
+    // exh = is_exhaustive();
 
     if (hnb > new_bits) new_bits = hnb;
     else if(exh) new_bits = 3;
@@ -3280,6 +3287,139 @@ static void write_crash_readme(void) {
 
 }
 
+/* Find first power of two greater or equal to val (assuming val under
+   2^31). */
+
+static u32 next_p2(u32 val) {
+
+  u32 ret = 1;
+  while (val > ret) ret <<= 1;
+  return ret;
+
+}
+
+/* Trim all new test cases to save cycles when doing deterministic checks. The
+   trimmer uses power-of-two increments somewhere between 1/16 and 1/1024 of
+   file size, to keep the stage short and sweet. */
+
+static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf, u8 dont) {
+
+  static u8 tmp[64];
+  static u8 clean_trace[MAP_SIZE];
+
+  u8  needs_write = 0, fault = 0;
+  u32 trim_exec = 0;
+  u32 remove_len;
+  u32 len_p2;
+
+  /* Although the trimmer will be less useful when variable behavior is
+     detected, it will still work to some extent, so we don't check for
+     this. */
+
+  if (q->len < 5) return 0;
+
+  stage_name = tmp;
+  bytes_trim_in += q->len;
+
+  /* Select initial chunk len, starting with large steps. */
+
+  len_p2 = next_p2(q->len);
+
+  remove_len = MAX(len_p2 / TRIM_START_STEPS, TRIM_MIN_BYTES);
+
+  /* Continue until the number of steps gets too high or the stepover
+     gets too small. */
+
+  while (remove_len >= MAX(len_p2 / TRIM_END_STEPS, TRIM_MIN_BYTES)) {
+
+    u32 remove_pos = remove_len;
+
+    sprintf(tmp, "trim %s/%s", DI(remove_len), DI(remove_len));
+
+    stage_cur = 0;
+    stage_max = q->len / remove_len;
+
+    while (remove_pos < q->len) {
+
+      u32 trim_avail = MIN(remove_len, q->len - remove_pos);
+      u32 cksum;
+
+      write_with_gap(in_buf, q->len, remove_pos, trim_avail);
+
+      fault = run_target(argv, exec_tmout);
+      trim_execs++;
+
+      if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
+
+      /* Note that we don't keep track of crashes or hangs here; maybe TODO? */
+      cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+
+      /* If the deletion had no impact on the trace, make it permanent. This
+         isn't perfect for variable-path inputs, but we're just making a
+         best-effort pass, so it's not a big deal if we end up with false
+         negatives every now and then. */
+
+      if (cksum == q->exec_cksum)
+      {
+        u32 move_tail = q->len - remove_pos - trim_avail;
+
+        q->len -= trim_avail;
+        len_p2  = next_p2(q->len);
+
+        memmove(in_buf + remove_pos, in_buf + remove_pos + trim_avail, 
+                move_tail);
+
+        /* Let's save a clean trace, which will be needed by
+           update_bitmap_score once we're done with the trimming stuff. */
+
+        if (!needs_write) {
+
+          needs_write = 1;
+          memcpy(clean_trace, trace_bits, MAP_SIZE);
+
+        }
+
+      } else remove_pos += remove_len;
+
+      /* Since this can be slow, update the screen every now and then. */
+
+      if (!(trim_exec++ % stats_update_freq)) show_stats();
+      stage_cur++;
+
+    }
+
+    remove_len >>= 1;
+
+  }
+
+  /* If we have made changes to in_buf, we also need to update the on-disk
+     version of the test case. */
+
+  if (needs_write && !dont) {
+
+    s32 fd;
+
+    unlink(q->fname); /* ignore errors */
+
+    fd = open(q->fname, O_WRONLY | O_CREAT | O_EXCL, 0600);
+
+    if (fd < 0) PFATAL("Unable to create '%s'", q->fname);
+
+    ck_write(fd, in_buf, q->len, q->fname);
+    close(fd);
+
+    memcpy(trace_bits, clean_trace, MAP_SIZE);
+    update_bitmap_score(q);
+
+  }
+
+abort_trimming:
+
+  bytes_trim_out += q->len;
+  return fault;
+
+}
+
 
 /* Check if the result of an execve() during routine fuzzing is interesting,
    save or queue the input test case for further analysis if so. Returns 1 if
@@ -3292,6 +3432,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   u8  exh = 0;
   s32 fd;
   u8  keeping = 0, res;
+  u8  its_ok = 0;
   
   if (fault == crash_mode) {
 
@@ -3299,13 +3440,21 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
        future fuzzing, etc. */
 
     hnb = has_new_bits(virgin_bits);
-    agg_teru();
-    if(UR(1000)<3){
-      exh = is_exhaustive();
-      // exhaustive_execs += exh;
+    if(!hnb) exh = agg_teru();
+    if(exh) {
+      exhaustive_execs ++;
+      exhaustion_thresh ++;
+      if(UR(exhaustion_thresh) < exhaustive_execs) {
+        exhaustive_execs --;
+        its_ok = 1;
+      }
     }
+    // if(UR(1000)<3){
+    // exh = is_exhaustive();
+      // exhaustive_execs += exh;
+    // }
 
-    if (!hnb && !exh) {
+    if (!hnb || its_ok) {
       if (crash_mode) total_crashes++;
       return 0;
     }
@@ -3340,6 +3489,20 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
       successful. */
 
   res = calibrate_case(argv, queue_top, mem, queue_cycle - 1, 0);
+
+  if(queue_top->exhaustive && !queue_top->trim_done) {
+
+    u8 res = trim_case(argv, queue_top, (u8*) mem, 1);
+
+    if (res == FAULT_ERROR)
+      FATAL("Unable to execute target application");
+
+    /* Don't retry trimming, even if it failed. */
+
+    queue_top->trim_done = 1;
+
+    if (len != queue_top->len) len = queue_top->len;
+  }
 
   if (res == FAULT_ERROR)
     FATAL("Unable to execute target application");
@@ -4374,7 +4537,7 @@ static void show_stats(void) {
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d - %d", max_TERU, curr_teru);
+  sprintf(tmp, "%d-%d-%d", max_TERU, exhaustion_thresh, exhaustive_execs);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -4637,144 +4800,7 @@ static void show_init_stats(void) {
 
   OKF("All set and ready to roll!");
 
-}
-
-
-/* Find first power of two greater or equal to val (assuming val under
-   2^31). */
-
-static u32 next_p2(u32 val) {
-
-  u32 ret = 1;
-  while (val > ret) ret <<= 1;
-  return ret;
-
 } 
-
-
-/* Trim all new test cases to save cycles when doing deterministic checks. The
-   trimmer uses power-of-two increments somewhere between 1/16 and 1/1024 of
-   file size, to keep the stage short and sweet. */
-
-static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
-
-  static u8 tmp[64];
-  static u8 clean_trace[MAP_SIZE];
-
-  u8  needs_write = 0, 
-  fault = 0;
-  u32 trim_exec = 0;
-  u32 remove_len;
-  u32 len_p2;
-
-  /* Although the trimmer will be less useful when variable behavior is
-     detected, it will still work to some extent, so we don't check for
-     this. */
-
-  if (q->len < 5) return 0;
-
-  stage_name = tmp;
-  bytes_trim_in += q->len;
-
-  /* Select initial chunk len, starting with large steps. */
-
-  len_p2 = next_p2(q->len);
-
-  remove_len = MAX(len_p2 / TRIM_START_STEPS, TRIM_MIN_BYTES);
-
-  /* Continue until the number of steps gets too high or the stepover
-     gets too small. */
-
-  while (remove_len >= MAX(len_p2 / TRIM_END_STEPS, TRIM_MIN_BYTES)) {
-
-    u32 remove_pos = remove_len;
-
-    sprintf(tmp, "trim %s/%s", DI(remove_len), DI(remove_len));
-
-    stage_cur = 0;
-    stage_max = q->len / remove_len;
-
-    while (remove_pos < q->len) {
-
-      u32 trim_avail = MIN(remove_len, q->len - remove_pos);
-      u32 exec_cksum;
-
-      write_with_gap(in_buf, q->len, remove_pos, trim_avail);
-
-      fault = run_target(argv, exec_tmout);
-      trim_execs++;
-
-      if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
-
-      /* Note that we don't keep track of crashes or hangs here; maybe TODO? */
-      exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-
-      /* If the deletion had no impact on the trace, make it permanent. This
-         isn't perfect for variable-path inputs, but we're just making a
-         best-effort pass, so it's not a big deal if we end up with false
-         negatives every now and then. */
-
-      if (exec_cksum == q->exec_cksum)
-      {
-        u32 move_tail = q->len - remove_pos - trim_avail;
-
-        q->len -= trim_avail;
-        len_p2  = next_p2(q->len);
-
-        memmove(in_buf + remove_pos, in_buf + remove_pos + trim_avail, 
-                move_tail);
-
-        /* Let's save a clean trace, which will be needed by
-           update_bitmap_score once we're done with the trimming stuff. */
-
-        if (!needs_write) {
-
-          needs_write = 1;
-          memcpy(clean_trace, trace_bits, MAP_SIZE);
-
-        }
-
-      } else remove_pos += remove_len;
-
-      /* Since this can be slow, update the screen every now and then. */
-
-      if (!(trim_exec++ % stats_update_freq)) show_stats();
-      stage_cur++;
-
-    }
-
-    remove_len >>= 1;
-
-  }
-
-  /* If we have made changes to in_buf, we also need to update the on-disk
-     version of the test case. */
-
-  if (needs_write) {
-
-    s32 fd;
-
-    unlink(q->fname); /* ignore errors */
-
-    fd = open(q->fname, O_WRONLY | O_CREAT | O_EXCL, 0600);
-
-    if (fd < 0) PFATAL("Unable to create '%s'", q->fname);
-
-    ck_write(fd, in_buf, q->len, q->fname);
-    close(fd);
-
-    memcpy(trace_bits, clean_trace, MAP_SIZE);
-
-    update_bitmap_score(q);
-
-  }
-
-abort_trimming:
-
-  bytes_trim_out += q->len;
-  return fault;
-
-}
 
 
 /* Write a modified test case, run program, process results. Handle
@@ -5247,7 +5273,7 @@ static u8 fuzz_one(char** argv) {
 
   if (!dumb_mode && !queue_cur->trim_done) {
 
-    u8 res = trim_case(argv, queue_cur, in_buf);
+    u8 res = trim_case(argv, queue_cur, in_buf, 0);
 
     if (res == FAULT_ERROR)
       FATAL("Unable to execute target application");
@@ -8219,8 +8245,6 @@ int main(int argc, char** argv) {
   queue_pre = NULL;
 
   while (1) {
-
-    exhaustive_execs = 0;
     
     u8 skipped_fuzz;
 

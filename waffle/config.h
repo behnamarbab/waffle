@@ -317,11 +317,7 @@
 #define MAP_SIZE_POW2       16
 #define MAP_SIZE            (1 << MAP_SIZE_POW2)
 
-#define MULT_TRESH          (float) 1.00
-#define MAX_CNT_MULT        1.05
-#define MAX_FAV_MULT        1.10
-#define ELITE_LEN           5
-// may need a const u32 ELITE_WEIGHTS[] = {4, 2, 2, 1, 1};
+#define MIN_EXHAUSTIVENESS  1000 
 
 /* Maximum allocator request size (keep well under INT_MAX): */
 
