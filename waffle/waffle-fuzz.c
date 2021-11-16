@@ -3444,7 +3444,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     if(exh) {
       exhaustive_execs ++;
       exhaustion_thresh ++;
-      if(UR(exhaustion_thresh) < exhaustive_execs) {
+      if(UR(queued_paths*queued_paths) < current_entry*current_entry) {
         exhaustive_execs --;
         its_ok = 1;
       }
