@@ -154,7 +154,6 @@ EXP_ST u32* ERUs;                     /* ERU - SHM with 2nd variable     */
 
 EXP_ST u32 exhaustive_execs = 0;
 EXP_ST u32 MX_ERU_counter = 0;
-EXP_ST u32 exhaustion_thresh = MIN_EXHAUSTIVENESS;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -186,7 +185,8 @@ EXP_ST u32 queued_paths,              /* Total number of queued testcases */
            useless_at_start,          /* Number of useless starting paths */
            var_byte_count,            /* Bitmap bytes with var behavior   */
            current_entry,             /* Current queue entry ID           */
-           havoc_div = 1;             /* Cycle count divisor for havoc    */
+           havoc_div = 1,             /* Cycle count divisor for havoc    */
+           ignored_eru;               /* Ignored ERU cases in each cycle  */
 
 EXP_ST u64 total_crashes,             /* Total number of crashes          */
            unique_crashes,            /* Crashes with unique signatures   */
@@ -3432,7 +3432,6 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   u8  exh = 0;
   s32 fd;
   u8  keeping = 0, res;
-  u8  its_ok = 0;
   
   if (fault == crash_mode) {
 
@@ -3441,20 +3440,14 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
     hnb = has_new_bits(virgin_bits);
     if(!hnb) exh = agg_teru();
-    if(exh) {
-      exhaustive_execs ++;
-      exhaustion_thresh ++;
-      if(UR(queued_paths*queued_paths) < current_entry*current_entry) {
-        exhaustive_execs --;
-        its_ok = 1;
-      }
-    }
-    // if(UR(1000)<3){
-    // exh = is_exhaustive();
-      // exhaustive_execs += exh;
-    // }
 
-    if (!hnb || its_ok) {
+    // If exhaustive, but in early stages, lets skip looking for exhaustion
+    if(exh && UR(queued_paths) < current_entry) {
+      exh = 0;
+      ignored_eru ++;
+    }
+
+    if (!hnb && !exh) {
       if (crash_mode) total_crashes++;
       return 0;
     }
@@ -3478,7 +3471,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     queued_with_cov++;
   }
 
-  else if (exh) {
+  if (exh) {
     queued_with_ERU++;
     queue_top->exhaustive = 1;
   }
@@ -4537,7 +4530,7 @@ static void show_stats(void) {
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d-%d-%d", max_TERU, exhaustion_thresh, exhaustive_execs);
+  sprintf(tmp, "%d-%d", max_TERU, ignored_eru);
 
   SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
@@ -8303,6 +8296,7 @@ int main(int argc, char** argv) {
 	  queue_cur = queue_cur->next;
     current_entry++;
 
+    ignored_eru = 0;
   }
 
   if (queue_cur) show_stats();
