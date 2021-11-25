@@ -1,5 +1,5 @@
 /*
-   MemLock and american fuzzy lop - fuzzer code
+   Waffle - american fuzzy lop - fuzzer code
    --------------------------------
 
    AFL is written and maintained by Michal Zalewski <lcamtuf@google.com>
@@ -149,11 +149,11 @@ static s32 forksrv_pid,               /* PID of the fork server           */
            out_dir_fd = -1;           /* FD of the lock file              */
 
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
+EXP_ST u32 mx_varbytes;
 
 EXP_ST u32* ERUs;                     /* ERU - SHM with 2nd variable     */
 
 EXP_ST u32 exhaustive_execs = 0;
-EXP_ST u32 MX_ERU_counter = 0;
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -284,9 +284,11 @@ struct queue_entry {
 
 
 EXP_ST u64 TERU = 0;
-EXP_ST u32 max_TERU = 0;
+EXP_ST u64 max_TERU = 0;
 EXP_ST u32 curr_teru = 0;
 EXP_ST u8* last_method;
+EXP_ST u32 ERU_buffer[100];
+EXP_ST u32 ERU_buff_id;
 
 
 static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
@@ -837,6 +839,30 @@ static void mark_as_redundant(struct queue_entry* q, u8 state) {
 
 }
 
+static inline u32 agg_teru() {
+  curr_teru = 0;
+  u64* current = (u64*)trace_bits;
+  u32* curreru = ERUs;
+
+  u32 i = (MAP_SIZE >> 3);
+  while(i--) {
+    if (unlikely(*current)) {
+      for(u32 j=0; j<8; j++) {
+        curr_teru += curreru[j];
+      }
+    }
+    current ++;
+    curreru += 8;
+  }
+
+  if(curr_teru > max_TERU) {
+    max_TERU = curr_teru;
+    return 1;
+  }
+
+  return 0;  
+}
+
 /* Append new test case to the queue. */
 
 static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
@@ -847,6 +873,14 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
+
+  agg_teru();
+
+  for(int i=0; i<100; i++)
+    if(ERU_buffer[i] < curr_teru) {
+      ERU_buffer[i] = curr_teru;
+      break;
+    }
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -937,30 +971,6 @@ static u32 nomralize_32(u32 n) {
   u32 lg = 0;
   for(; n>0; n>>=1, lg++);
   return 1<<(lg-1);
-}
-
-static inline u32 agg_teru() {
-  curr_teru = 0;
-  u64* current = (u64*)trace_bits;
-  u32* curreru = ERUs;
-
-  u32 i = (MAP_SIZE >> 3);
-  while(i--) {
-    if (unlikely(*current)) {
-      for(u32 j=0; j<8; j++) {
-        curr_teru += curreru[j];
-      }
-    }
-    current ++;
-    curreru += 8;
-  }
-
-  if(curr_teru > max_TERU) {
-    max_TERU = curr_teru;
-    return 1;
-  }
-
-  return 0;  
 } 
 
 static inline u8 is_exhaustive() {
@@ -1356,7 +1366,7 @@ static void update_bitmap_score(struct queue_entry* q) {
 
         if (fav_factor > top_rated[i][0]->exec_us * top_rated[i][0]->len) {
           if(top_rated[i][1]) {
-            if(!var_bytes[i] || top_rated[i][1]->TERU >= q->TERU) {
+            if(top_rated[i][1]->TERU >= q->TERU) {
               continue;
             }
           }
@@ -1461,6 +1471,8 @@ static void cull_queue(void) {
     }
 
   q = queue;
+  last_method = "Coverage";
+  if(q->exhaustive) last_method = "Exhaustion";
   tmpq = q;
 
   while (q) {
@@ -2773,6 +2785,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
         }
 
+        u32 vb = count_bytes(var_bytes);
+        if(vb>mx_varbytes) mx_varbytes = vb;
+
         var_detected = 1;
 
       } else {
@@ -3439,10 +3454,10 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
        future fuzzing, etc. */
 
     hnb = has_new_bits(virgin_bits);
-    if(!hnb) exh = agg_teru();
+    exh = agg_teru();
 
     // If exhaustive, but in early stages, lets skip looking for exhaustion
-    if(exh && UR(queued_paths) < current_entry) {
+    if(!hnb && exh && UR(queued_paths) < current_entry) {
       exh = 0;
       ignored_eru ++;
     }
@@ -4335,7 +4350,7 @@ static void show_stats(void) {
 
   sprintf(tmp + banner_pad, "%s " cLCY VERSION cLGN
           " (%s)",  crash_mode ? cPIN "peruvian were-rabbit" : 
-          cYEL "american fuzzy lop", use_banner);
+          cYEL "      Waffle", use_banner);
 
   SAYF("\n%s\n\n", tmp);
 
@@ -4479,12 +4494,10 @@ static void show_stats(void) {
   }
 
   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
-  if(MX_ERU_counter < exhaustive_execs) {
-    MX_ERU_counter = exhaustive_execs;
-  }
+  
   sprintf(tmp, "%s", DI(queued_with_ERU));
 
-  SAYF("  Queued with ERU : " cRST "%-22s " bSTG bV "\n", tmp);
+  SAYF("    ERU queued : " cRST "%-22s " bSTG bV "\n", tmp);
 
   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
@@ -4525,14 +4538,25 @@ static void show_stats(void) {
 
   SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-22s " bSTG bV "\n", tmp);
 
-  u8 *method_stage_name = "AFL";
+  u8 *method_stage_name = "Coverage";
+  if(last_method) method_stage_name = last_method;
 
   SAYF(bV bSTOP "      method : " cRST "%-21s ", method_stage_name);
   //            ^             : ^
   
-  sprintf(tmp, "%d-%d", max_TERU, ignored_eru);
+  u64 average = 0;
 
-  SAYF (bSTG bV bSTOP "  Total insts  : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
+  int ii;
+  
+  for(ii=0; ii<100 && ERU_buffer[ii]; ii++) {
+    average += ERU_buffer[ii];
+  }
+  if(ii)
+    average /= ii;
+
+  sprintf(tmp, "%s/%s", DI(average) , DI(max_TERU));
+
+  SAYF (bSTG bV bSTOP " ERU (CAP/MAX) : " cRST "%s%-22s " bSTG bV "\n", cRST, tmp);
                                       //
   /* end */
 
@@ -7929,9 +7953,12 @@ int main(int argc, char** argv) {
   u8  mem_limit_given = 0;
   u8  exit_1 = !!getenv("AFL_BENCH_JUST_ONE");
   char** use_argv;
+  ERU_buff_id = 0;
 
   struct timeval tv;
   struct timezone tz;
+
+  for(int ii=0; ii<100; ii++) ERU_buffer[ii] = 0;
 
   SAYF(cCYA " Waffle-fuzzer: waffle-fuzz " cBRI VERSION cRST " by <behnamarbab>\n");
 
@@ -8297,6 +8324,7 @@ int main(int argc, char** argv) {
     current_entry++;
 
     ignored_eru = 0;
+    mx_varbytes = 0;
   }
 
   if (queue_cur) show_stats();
@@ -8323,7 +8351,7 @@ stop_fuzzing:
   fclose(plot_file);
   destroy_queue();
   destroy_extras();
-  ck_free(top_rated);
+  // ck_free(top_rated);
   ck_free(target_path);
   ck_free(sync_id);
 
